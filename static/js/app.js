@@ -43,7 +43,7 @@ import {
 } from './playback.js';
 import { connectStatusStream, disconnectStatusStream } from './status-stream.js';
 import { initDialogs } from './modal.js';
-import { autoFillServerHost, saveConfig, loadConfig, initServerHostUI, initPollIntervalUI, initConversationPollDebugUI, initSmartResumeUI, initMaxSongIndexUI, initConversationUI, initVoiceCommandUI, initVoiceMemoryUI, initTimezoneUI, initForceMp3UI, initIndicatorLightUI, initTouchscreenLyricsUI, initExtraMusicApiModelsUI, initAIConfigUI, initExternalSearchUI, initExternalSearchSpecUI, initInterruptBroadcastUI, initDefaultCoverUI, loadConversationStatus } from './config.js';
+import { autoFillServerHost, saveConfig, loadConfig, initServerHostUI, initPollIntervalUI, initConversationPollDebugUI, initSmartResumeUI, initMaxSongIndexUI, initConversationUI, initVoiceCommandUI, initVoiceMemoryUI, initTimezoneUI, initForceMp3UI, initVolumeNormalizeUI, initSongTransitionUI, initIndicatorLightUI, initTouchscreenLyricsUI, initExtraMusicApiModelsUI, initAIConfigUI, initExternalSearchUI, initExternalSearchSpecUI, initInterruptBroadcastUI, initDefaultCoverUI, loadConversationStatus } from './config.js';
 import { addAccount, addAccountWithToken, deleteAccount, toggleDeviceManagement, loadAccounts, reLoginAccount } from './account.js';
 import { submitCaptcha, openVerifyUrl, submitVerifyCode, startQRCodeLogin } from './auth.js';
 import { Tracely } from './tracely-sdk.js';
@@ -611,6 +611,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // 初始化音频格式开关 UI
     initForceMp3UI();
+
+    // 初始化音量均衡开关 UI
+    initVolumeNormalizeUI();
+
+    // 初始化切歌过渡 UI
+    initSongTransitionUI();
 
     // 初始化指示灯开关 UI
     initIndicatorLightUI();

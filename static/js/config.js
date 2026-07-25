@@ -91,6 +91,19 @@ export function loadConfig() {
                 radioForceMp3Switch.checked = radioForceMp3;
             }
 
+            // 音量均衡开关
+            const volumeNormalize = !!data.data.volume_normalize;
+            const volumeNormalizeSwitch = document.getElementById('volumeNormalizeSwitch');
+            if (volumeNormalizeSwitch) {
+                volumeNormalizeSwitch.checked = volumeNormalize;
+            }
+
+            // 切歌偏移
+            const songTransitionOffsetInput = document.getElementById('songTransitionOffset');
+            if (songTransitionOffsetInput) {
+                songTransitionOffsetInput.value = data.data.song_transition_offset ?? 0;
+            }
+
             // 指示灯开关
             const indicatorLightEnabled = !!data.data.indicator_light_enabled;
             const indicatorLightSwitch = document.getElementById('indicatorLightSwitch');
@@ -888,6 +901,64 @@ export function initForceMp3UI() {
             toggleRadioForceMp3(this.checked);
         });
     }
+}
+
+// ========== 音量均衡 ==========
+
+/**
+ * 初始化音量均衡开关 UI 事件
+ */
+export function initVolumeNormalizeUI() {
+    const switchEl = document.getElementById('volumeNormalizeSwitch');
+    if (switchEl) {
+        switchEl.addEventListener('change', function() {
+            toggleVolumeNormalize(this.checked);
+        });
+    }
+}
+
+/**
+ * 切换音量均衡开关
+ */
+function toggleVolumeNormalize(enabled) {
+    apiPost('/config', { volume_normalize: enabled })
+        .then(data => {
+            if (data.success) {
+                showSnackbar(enabled ? '已开启音量均衡' : '已关闭音量均衡', 'success');
+            } else {
+                showSnackbar('操作失败：' + (data.error || '未知错误'), 'error');
+                const switchEl = document.getElementById('volumeNormalizeSwitch');
+                if (switchEl) switchEl.checked = !enabled;
+            }
+        })
+        .catch(error => {
+            showSnackbar('操作失败：' + error.message, 'error');
+            const switchEl = document.getElementById('volumeNormalizeSwitch');
+            if (switchEl) switchEl.checked = !enabled;
+        });
+}
+
+// ========== 切歌过渡 ==========
+
+/**
+ * 初始化切歌过渡偏移 UI 事件
+ */
+export function initSongTransitionUI() {
+    const input = document.getElementById('songTransitionOffset');
+    if (!input) return;
+    input.addEventListener('change', function() {
+        const val = Math.max(-30, Math.min(30, parseInt(this.value) || 0));
+        this.value = val;
+        apiPost('/config', { song_transition_offset: val })
+            .then(data => {
+                if (data.success) {
+                    showSnackbar('切歌偏移已设为 ' + val + ' 秒', 'success');
+                } else {
+                    showSnackbar('保存失败：' + (data.error || '未知错误'), 'error');
+                }
+            })
+            .catch(error => showSnackbar('保存失败：' + error.message, 'error'));
+    });
 }
 
 // ========== 指示灯 ==========
