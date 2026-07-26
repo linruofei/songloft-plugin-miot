@@ -765,12 +765,13 @@ export class PlaylistManager {
 
     const nextSong = this.songs[nextIdx];
     if (!nextSong || !nextSong.url) return;
-    if (nextSong.type === 'local') return;
+    // 绝对外链（未经后端代理的远程直链）不走后端 ?prefetch=1 端点，跳过。
     if (nextSong.url.startsWith('http://') || nextSong.url.startsWith('https://')) return;
 
     // 捕获到局部常量：跨 async 边界后 TS 不再对 nextSong.url 做非空收窄。
     const songUrl = nextSong.url;
     const title = nextSong.title;
+    const isLocal = nextSong.type === 'local';
 
     void (async () => {
       let forceMp3 = false;
@@ -782,6 +783,11 @@ export class PlaylistManager {
       } catch {
         // 读配置失败按不强制处理，仍预热源格式
       }
+      // 本地歌曲已在服务端磁盘上：不开启转码选项时播放就是直接 ServeFile，无冷启动，预热无意义。
+      // 但已下载的网络歌曲（MOV/MKV 等视频容器）也属于 local 类型，开启统一 MP3 / 音量均衡后
+      // 播放要走 ffmpeg 转码（buildSongURL 对 local 同样追加 &format=mp3）；此时必须预热，
+      // 否则切歌时才实时转码、冷启动延迟（songloft-org/songloft#324）。
+      if (isLocal && !forceMp3 && !volumeNormalize) return;
       const separator = songUrl.includes('?') ? '&' : '?';
       let prefetchPath = songUrl + separator + 'prefetch=1' + (forceMp3 ? '&format=mp3' : '');
       if (volumeNormalize) {

@@ -270,6 +270,8 @@ export interface AIAnalysisResult {
     mode?: string;
     volume?: number;
     direction?: string;
+    /** favorite 操作：add=收藏当前歌曲 / remove=取消收藏 */
+    action?: string;
   };
   /** AI 置信度 */
   confidence: 'high' | 'medium' | 'low';
