@@ -761,7 +761,12 @@ html[data-theme="dark"] {
     display: none;
 }
 
-.song-item-cover-wrap:has(.song-item-cover[src]:not([src=""])) .song-item-cover {
+/* 用属性选择器 + 兄弟组合器（而非 :has()）切换显隐：img 挂上 src 后显示自身、
+   隐藏其后的占位图标。:has() 需 Chromium >= 105，部分 Android System WebView
+   版本偏旧不支持，会导致 display:block 规则永不生效、封面永远 display:none
+   隐藏（web/WebView2 正常，Android 手机端不显示，songloft-org/songloft#321）。
+   img 在 DOM 中先于占位符，故 ~ 通用兄弟组合器成立。 */
+.song-item-cover[src]:not([src=""]) {
     display: block;
 }
 
@@ -771,7 +776,7 @@ html[data-theme="dark"] {
     font-size: 24px;
 }
 
-.song-item-cover-wrap:has(.song-item-cover[src]:not([src=""])) .song-item-cover-placeholder {
+.song-item-cover[src]:not([src=""]) ~ .song-item-cover-placeholder {
     display: none;
 }
 
@@ -3218,7 +3223,9 @@ html.embed #tab-player {
     display: none;
 }
 
-.player-bar-cover-wrap:has(.player-bar-cover[src]):not(.player-bar-cover[src=""]) .player-bar-cover {
+/* 同 song-item-cover：改用属性选择器 + 兄弟组合器替代 :has()，兼容旧版
+   Android System WebView（songloft-org/songloft#321）。 */
+.player-bar-cover[src]:not([src=""]) {
     display: block;
 }
 
@@ -3314,7 +3321,7 @@ html.embed .player-bar-cover {
     color: var(--md-on-surface-variant);
     font-size: 24px;
 }
-.player-bar-cover-wrap:has(.player-bar-cover[src]:not([src=""])) .player-bar-cover-placeholder {
+.player-bar-cover[src]:not([src=""]) ~ .player-bar-cover-placeholder {
     display: none;
 }
 
