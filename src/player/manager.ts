@@ -80,6 +80,7 @@ export class PlaylistManager {
   private tempArtistQuery: string = ''; // 临时歌手歌单的原始搜索词，用于持久化和恢复
   private pendingTempArtist: string = ''; // 待恢复的临时歌手名（索引就绪后自动恢复）
   private _lastLoadNotFound: boolean = false; // 上次 loadPlaylistSongs 失败是否因歌单不存在(ID 过期)
+  private hardStopped: boolean = false; // 上次暂停被设备忽略而升级为 stop：设备端已无媒体上下文，续播需重推 URL
   // 输出目标设备集合：独立设备时仅含自身；分组时含组内全部成员。
   // 一个分组共用一个 PlaylistManager（同一套队列/索引/播放模式/定时器/随机数），
   // 播放/暂停/停止/切歌等指令统一下发给 targets 里的所有音箱，从根本上保证多房间同步、随机不跑偏。
@@ -160,14 +161,17 @@ export class PlaylistManager {
   /**
    * 播放歌单并从指定歌曲 ID 开始播放
    * 用于外部搜索导入并追加到歌单后，接管为「完整歌单播放」，
-   * 使歌曲播完后由切歌定时器自动续播歌单其余歌曲（issue #53）。
-   * 找不到该歌曲时回退到从歌单头部播放。
+   * 使歌曲播完后由切歌定时器自动续播歌单其余歌曲（issue #53）；
+   * 也用于网页端点列表播放——按歌曲 ID 定位比按下标可靠，前端列表与
+   * 服务端刚拉取的歌单顺序不一致时不会串歌（#59）。
+   * 找不到该歌曲时回退到 fallbackIndex（未传则歌单头部）。
    * @param playlistId - 歌单ID
    * @param songId - 起始歌曲ID（通常是刚追加到歌单末尾的那首）
    * @param mode - 播放模式（默认order）
+   * @param fallbackIndex - 歌单内找不到 songId 时的兜底起始下标
    * @returns 是否成功
    */
-  async playPlaylistFromSong(playlistId: number, songId: number, mode?: PlayMode): Promise<boolean> {
+  async playPlaylistFromSong(playlistId: number, songId: number, mode?: PlayMode, fallbackIndex?: number): Promise<boolean> {
     // 立即停止定时器和重置状态，防止 loadPlaylistSongs 期间旧定时器触发 onSongFinished
     this.stopCheckTimer();
     this.state = 'idle';
@@ -185,11 +189,12 @@ export class PlaylistManager {
       return false;
     }
 
-    // 定位目标歌曲索引；追加的歌曲通常在末尾，找不到时回退到从头播放
+    // 定位目标歌曲索引；追加的歌曲通常在末尾，找不到时回退到 fallbackIndex（默认歌单头部）
     let startIndex = this.songs.findIndex(s => s.id === songId);
     if (startIndex < 0) {
-      songloft.log.warn(`[PlaylistManager] Song ${songId} not found in playlist ${playlistId}, starting from head`);
-      startIndex = 0;
+      startIndex = (fallbackIndex !== undefined && fallbackIndex >= 0 && fallbackIndex < this.songs.length)
+        ? fallbackIndex : 0;
+      songloft.log.warn(`[PlaylistManager] Song ${songId} not found in playlist ${playlistId}, falling back to index ${startIndex}`);
     }
 
     this.playlistId = playlistId;
@@ -269,6 +274,9 @@ export class PlaylistManager {
 
   /**
    * 暂停播放（保持状态，可恢复）
+   *
+   * 逐台核验暂停是否真的生效：部分型号会受理 pause 却继续出声，此时底层已升级为 stop。
+   * 只要有一台被硬停，就记下 hardStopped——设备端媒体上下文已丢失，续播必须重推 URL。
    */
   async pause(): Promise<void> {
     this.stopCheckTimer();
@@ -277,9 +285,17 @@ export class PlaylistManager {
     // 不重置 playStartTimeMs，保持当前播放进度
 
     // 暂停所有目标设备（分组时为组内全部音箱）
-    await this.forEachTarget('pause', t => this.minaService.pausePlay(t.account_id, t.device_id));
+    const results = await Promise.all(this.targets.map(async (t) => {
+      try {
+        return await this.minaService.pausePlayVerified(t.account_id, t.device_id);
+      } catch (e) {
+        songloft.log.warn(`[PlaylistManager] pause failed for ${t.account_id}:${t.device_id}: ${String(e)}`);
+        return 'failed' as const;
+      }
+    }));
+    this.hardStopped = results.includes('stopped');
 
-    songloft.log.info('[PlaylistManager] Playback paused');
+    songloft.log.info(`[PlaylistManager] Playback paused results=${results.join(',')} hardStopped=${this.hardStopped}`);
   }
 
   /**
@@ -476,6 +492,13 @@ export class PlaylistManager {
    */
   async resumePlayback(): Promise<boolean> {
     if ((this.state !== 'playing' && this.state !== 'paused') || this.songs.length === 0) {
+      return false;
+    }
+
+    // 上次暂停被设备忽略而升级为 stop：设备端已无媒体上下文，play 指令续不回来，
+    // 交由上层回退到「重推当前歌曲 URL」（从头播）。
+    if (this.hardStopped) {
+      songloft.log.info('[PlaylistManager] Resume after hard stop, needs replay');
       return false;
     }
 
@@ -736,6 +759,7 @@ export class PlaylistManager {
 
     this.clearVoiceSuspend();
     this.state = 'playing';
+    this.hardStopped = false;
     this.playStartTimeMs = Date.now();
 
     // 如果歌曲时长有效，注册定时器播放下一首

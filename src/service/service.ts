@@ -176,6 +176,25 @@ export class MinaService {
   }
 
   /**
+   * 暂停播放并核验是否真的生效（详见 MinaClient.playerPauseVerified）。
+   * 返回 'stopped' 表示该设备忽略了 pause、已升级为 stop，调用方需知晓无法原位续播。
+   */
+  async pausePlayVerified(accountId: string, deviceId: string): Promise<'paused' | 'stopped' | 'failed'> {
+    const client = this.getClient(accountId);
+    if (!client) {
+      songloft.log.warn('[MinaService] pausePlayVerified: no client for account: ' + accountId);
+      return 'failed';
+    }
+
+    try {
+      return await client.playerPauseVerified(deviceId);
+    } catch (e) {
+      songloft.log.error('[MinaService] pausePlayVerified failed: ' + String(e));
+      return 'failed';
+    }
+  }
+
+  /**
    * 恢复播放
    */
   async resumePlay(accountId: string, deviceId: string): Promise<boolean> {

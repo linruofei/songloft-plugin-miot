@@ -318,8 +318,11 @@ export function loadPlaylists() {
 /**
  * 加载歌单歌曲列表
  * @param {string} playlistId - 歌单 ID
+ * @param {Object} [options]
+ * @param {boolean} [options.silent=false] - 静默刷新：不弹「已加载 N 首歌曲」提示，也不上报歌单选择事件
  */
-export function loadPlaylistSongs(playlistId) {
+export function loadPlaylistSongs(playlistId, options) {
+    const silent = !!(options && options.silent);
     const songList = document.getElementById('songList');
     if (!songList) return Promise.resolve();
 
@@ -393,9 +396,10 @@ export function loadPlaylistSongs(playlistId) {
                 item.appendChild(durationSpan);
             }
 
-            // 点击歌曲直接播放
+            // 点击歌曲直接播放；带上 song_id，服务端按歌曲定位而非下标，避免列表过期时串歌
+            item.setAttribute('data-song-id', song.id);
             item.addEventListener('click', () => {
-                playSongAtIndex(index);
+                playSongAtIndex(index, song.id);
             });
 
             songList.appendChild(item);
@@ -404,7 +408,7 @@ export function loadPlaylistSongs(playlistId) {
         initSongSearch();
 
         // 上报歌单选择事件
-        if (window.tracely) {
+        if (window.tracely && !silent) {
             const playlistSelect = document.getElementById('playlistSelect');
             const selectedOption = playlistSelect ? playlistSelect.options[playlistSelect.selectedIndex] : null;
             window.tracely.reportEvent('playlist_select', {
@@ -415,7 +419,9 @@ export function loadPlaylistSongs(playlistId) {
         }
 
         showResult(data);
-        showSnackbar('已加载 ' + data.data.length + ' 首歌曲', 'success');
+        if (!silent) {
+            showSnackbar('已加载 ' + data.data.length + ' 首歌曲', 'success');
+        }
     }).catch(error => {
         hideLoading();
         showResult({ error: error.message });
@@ -428,9 +434,10 @@ export function loadPlaylistSongs(playlistId) {
 
 /**
  * 播放指定索引的歌曲
- * @param {number} index - 歌曲索引
+ * @param {number} index - 歌曲在当前列表中的索引
+ * @param {number} [songId] - 歌曲 ID；传入时服务端按 ID 定位起播歌曲（下标仅作兜底）
  */
-export function playSongAtIndex(index) {
+export function playSongAtIndex(index, songId) {
     const accountId = getAccountId();
     if (!accountId) return;
     const deviceId = getDeviceId();
@@ -452,14 +459,22 @@ export function playSongAtIndex(index) {
         device_id: deviceId,
         playlist_id: parseInt(playlistId),
         start_index: index,
+        song_id: songId || 0,
         play_mode: playMode
     }).then(data => {
         hideLoading();
         showResult(data);
         if (data.success) {
             showSnackbar('开始播放', 'success');
-            // 高亮当前歌曲
-            highlightSongItem(index);
+            // 高亮当前歌曲；服务端解析出的下标与本地不一致说明本地列表已过期，重新拉一遍再高亮
+            const serverIndex = data.data && typeof data.data.current_index === 'number'
+                ? data.data.current_index : index;
+            if (serverIndex !== index) {
+                console.warn('歌单列表已过期，重新加载：本地 index=' + index + ' 服务端 index=' + serverIndex);
+                loadPlaylistSongs(playlistId, { silent: true }).then(() => highlightSongItem(serverIndex));
+            } else {
+                highlightSongItem(serverIndex);
+            }
             if (window.tracely) {
                 window.tracely.reportEvent('song_play', {
                     playlist_id: playlistId,
@@ -485,15 +500,19 @@ export function playSongAtIndex(index) {
 
 /**
  * 高亮指定索引的歌曲项
- * @param {number} index - 歌曲索引
+ * @param {number} index - 歌曲索引（服务端下标，基于它自己拉取的歌单顺序）
+ * @param {number} [songId] - 歌曲 ID；下标对不上时按 ID 命中真实那一行（本地列表过期时更可靠）
  */
-export function highlightSongItem(index) {
+export function highlightSongItem(index, songId) {
     const songList = document.getElementById('songList');
     if (!songList) return;
     // 移除所有 active
     songList.querySelectorAll('.song-item.active').forEach(el => el.classList.remove('active'));
     // 添加 active
-    const target = songList.querySelector(`.song-item[data-index="${index}"]`);
+    let target = songList.querySelector(`.song-item[data-index="${index}"]`);
+    if (songId && (!target || target.getAttribute('data-song-id') !== String(songId))) {
+        target = songList.querySelector(`.song-item[data-song-id="${songId}"]`) || target;
+    }
     if (target) {
         target.classList.add('active');
     }

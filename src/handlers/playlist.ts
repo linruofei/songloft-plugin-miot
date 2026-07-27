@@ -286,7 +286,7 @@ export function registerPlaylistHandlers(
   router.post('/player/play', async (req: HTTPRequest) => {
     try {
       const body = parseBody(req);
-      const { account_id, device_id, playlist_id, start_index, play_mode } = body;
+      const { account_id, device_id, playlist_id, start_index, play_mode, song_id } = body;
 
       if (!account_id) {
         return jsonResponse({ success: false, error: 'account_id is required' });
@@ -309,18 +309,39 @@ export function registerPlaylistHandlers(
 
       const manager = await playlistManagerMap.getOrCreate(account_id, device_id);
       const mode: PlayMode = play_mode || 'order';
-      const ok = await manager.play(Number(playlist_id), start_index || 0, mode);
+      const playlistId = Number(playlist_id);
+      const startIndex = Number(start_index) || 0;
+      const songId = Number(song_id) || 0;
+
+      // 起始歌曲优先按 song_id 定位：调用方（网页列表）的下标可能基于一份已过期的歌单快照，
+      // 与服务端此刻拉到的顺序错位就会播成邻近的歌（#59）。song_id 找不到时才退回下标。
+      let ok: boolean;
+      if (isTempPlaylistId(playlistId)) {
+        // 临时歌单（语音「播放歌手XX」等）只存在于内存，没法按 ID 重新拉取
+        const localStatus = manager.getStatus();
+        const songs = manager.getSongs();
+        if (!songs || songs.length === 0 || localStatus.playlist_id !== playlistId) {
+          return jsonResponse({ success: false, error: 'temp playlist expired, please re-issue voice command' });
+        }
+        const idx = songId > 0 ? songs.findIndex((s: any) => s.id === songId) : -1;
+        ok = await manager.playWithSongs(songs as any, idx >= 0 ? idx : startIndex, mode, localStatus.playlist_name);
+      } else if (songId > 0) {
+        ok = await manager.playPlaylistFromSong(playlistId, songId, mode, startIndex);
+      } else {
+        ok = await manager.play(playlistId, startIndex, mode);
+      }
       if (!ok) {
         return jsonResponse({ success: false, error: 'failed to start playlist' });
       }
-
 
       return jsonResponse({
         success: true,
         data: {
           message: 'playlist started',
-          playlist_id: Number(playlist_id),
+          playlist_id: playlistId,
           play_mode: mode,
+          // 前端据此纠正高亮/列表：与请求的 start_index 不一致说明本地列表已过期
+          current_index: manager.getStatus().current_index,
           current_song: manager.getCurrentSong(),
         },
       });

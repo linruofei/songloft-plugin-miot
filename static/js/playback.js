@@ -390,9 +390,9 @@ export function updatePlayerUI(status) {
         updatePlayerBarLyric(currentPosition);
     }
 
-    // 高亮当前播放歌曲
+    // 高亮当前播放歌曲（带 song_id：本地列表与服务端顺序不一致时按歌曲命中，不会高亮错行）
     if (status.current_index !== undefined && status.current_index >= 0) {
-        highlightSongItem(status.current_index);
+        highlightSongItem(status.current_index, status.current_song && status.current_song.id);
     }
 
     // 同步设备实际音量到 UI（用户正在拖动或刚操作完 2 秒内跳过，避免覆盖）

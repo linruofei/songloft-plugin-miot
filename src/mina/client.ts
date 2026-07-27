@@ -25,6 +25,13 @@ import type { DeviceInfoRaw, DeviceListResponse, UbusResponse, NlpResultData, Nl
 const DEFAULT_MUSIC_AUDIO_ID = '1732418460076477549';
 const MUSIC_CP_ID = '355454500';
 
+/** player_get_play_status 的 status 值：正在播放 */
+const PLAY_STATUS_PLAYING = 1;
+/** 暂停后回读设备状态的次数（全部仍为 playing 才判定 pause 未生效） */
+const PAUSE_VERIFY_ATTEMPTS = 2;
+/** 每次回读前的等待时间（ms），给设备状态上报留缓冲 */
+const PAUSE_VERIFY_DELAY_MS = 700;
+
 export interface PlayMetadata {
   title: string;
   artist?: string;
@@ -321,19 +328,58 @@ export class MinaHTTPClient {
   }
 
   /**
+   * 播放控制原语（play / pause / stop）
+   * 统一带日志标签，并按设备级返回码判定成功：只看 ubus 外层 code 会把
+   * 「云端受理了但音箱拒绝执行」也当成功，导致暂停等操作静默失效。
+   */
+  private async playerOperation(deviceId: string, action: 'play' | 'pause' | 'stop'): Promise<boolean> {
+    const message = { action, media: 'app_ios' };
+    const result = await this.ubusRequest(deviceId, 'player_play_operation', 'mediaplayer', message, 'play-op:' + action);
+    return this.isDeviceResultOK(result, 'player_play_operation:' + action);
+  }
+
+  /**
    * 播放操作（play）
    */
   async playerPlay(deviceId: string): Promise<boolean> {
-    const message = { action: 'play', media: 'app_ios' };
-    return (await this.ubusRequest(deviceId, 'player_play_operation', 'mediaplayer', message)) !== null;
+    return this.playerOperation(deviceId, 'play');
   }
 
   /**
    * 暂停播放
    */
   async playerPause(deviceId: string): Promise<boolean> {
-    const message = { action: 'pause', media: 'app_ios' };
-    return (await this.ubusRequest(deviceId, 'player_play_operation', 'mediaplayer', message)) !== null;
+    return this.playerOperation(deviceId, 'pause');
+  }
+
+  /**
+   * 暂停播放并回读设备状态核验是否真的停下来了。
+   *
+   * 部分小爱型号在推流播放（player_play_url / player_play_music）下会「受理」pause 但音频继续，
+   * 表现为网页端暂停按钮无效（songloft-org/songloft-plugin-miot#59）。此时升级为 stop 真正静音，
+   * 与 xiaomusic 的 force_stop_xiaoai（pause → 查状态 → 仍在播则 stop）同策略。
+   *
+   * @returns 'paused' 暂停已生效 | 'stopped' 已升级为停止（设备端媒体上下文丢失，无法原位续播）
+   *          | 'failed' pause 与 stop 均下发失败
+   */
+  async playerPauseVerified(deviceId: string): Promise<'paused' | 'stopped' | 'failed'> {
+    const pauseOK = await this.playerPause(deviceId);
+
+    // 设备状态上报有延迟：连续两次回读都仍是 playing 才判定 pause 未生效，
+    // 避免误伤 pause 正常、只是状态上报慢的型号（升级 stop 会丢失续播位置）。
+    for (let i = 0; i < PAUSE_VERIFY_ATTEMPTS; i++) {
+      await new Promise(r => setTimeout(r, PAUSE_VERIFY_DELAY_MS));
+      const status = await this.readPlayStatus(deviceId);
+      if (status !== PLAY_STATUS_PLAYING) {
+        return 'paused';
+      }
+    }
+
+    songloft.log.warn(`[MinaClient] pause ignored by device=${deviceId} (still playing), escalating to stop`);
+    if (await this.playerOperation(deviceId, 'stop')) {
+      return 'stopped';
+    }
+    return pauseOK ? 'paused' : 'failed';
   }
 
   /**
@@ -349,8 +395,23 @@ export class MinaHTTPClient {
   async playerStop(deviceId: string): Promise<boolean> {
     // 部分小爱音箱型号单独调用 stop 不会真正停止播放，先暂停再停止
     await this.playerPause(deviceId);
-    const message = { action: 'stop', media: 'app_ios' };
-    return (await this.ubusRequest(deviceId, 'player_play_operation', 'mediaplayer', message)) !== null;
+    return this.playerOperation(deviceId, 'stop');
+  }
+
+  /**
+   * 回读设备播放状态码
+   * @returns 1=playing 2=paused 0=stopped，-1 表示未知（请求失败或响应无法解析）
+   */
+  async readPlayStatus(deviceId: string): Promise<number> {
+    const raw = await this.getPlayerStatus(deviceId);
+    const info = (raw?.data as any)?.info;
+    if (typeof info !== 'string') return -1;
+    try {
+      const parsed = JSON.parse(info);
+      return typeof parsed.status === 'number' ? parsed.status : -1;
+    } catch {
+      return -1;
+    }
   }
 
   // ===== 音量 =====
