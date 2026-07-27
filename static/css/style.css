@@ -3580,19 +3580,28 @@ html.embed .player-bar-cover {
 
 .fp-favorite-btn {
     color: rgba(255, 255, 255, 0.7);
-    transition: color 0.2s, transform 0.2s;
+    transition: color 0.2s, transform 0.2s, background 0.2s;
 }
 
 .fp-favorite-btn:active {
     transform: scale(0.85);
 }
 
-.fp-favorite-btn.is-favorited {
-    color: #ff4081;
-}
-
 .fp-toolbar .btn-icon {
     color: rgba(255, 255, 255, 0.7);
+}
+
+/* 已收藏态：注入的 Material Symbols 是静态字体（无 FILL 轴），
+   favorite_border 的连字也指向 favorite 同一个空心心形字形，
+   靠图标形状区分不了，所以用颜色 + 容器底色表达选中态。
+   选择器带 .fp-toolbar 前缀是为了压过上面同权重的 .fp-toolbar .btn-icon。 */
+.fp-toolbar .fp-favorite-btn.is-favorited {
+    color: #ff4081;
+    background: rgba(255, 64, 129, 0.16);
+}
+
+.fp-toolbar .fp-favorite-btn.is-favorited:hover {
+    background: rgba(255, 64, 129, 0.26);
 }
 
 .fp-song-title {

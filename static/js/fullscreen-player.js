@@ -421,12 +421,13 @@ function checkFavoriteStatus(songId) {
 
 function updateFavoriteUI(favorited) {
     isFavorited = favorited;
-    const icon = document.getElementById('fpFavoriteIcon');
     const btn = document.getElementById('fpFavoriteBtn');
-    if (icon) icon.textContent = favorited ? 'favorite' : 'favorite_border';
+    // 图标固定用 favorite：favorite_border 在注入的静态 Material Symbols 里
+    // 是 favorite 的连字别名，渲染出来完全一样，区分只能靠 .is-favorited 的样式
     if (btn) {
         btn.classList.toggle('is-favorited', favorited);
         btn.title = favorited ? '取消收藏' : '收藏';
+        btn.setAttribute('aria-pressed', favorited ? 'true' : 'false');
     }
 }
 
