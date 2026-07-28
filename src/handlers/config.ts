@@ -93,6 +93,8 @@ export function registerConfigHandlers(
           timezone: config.timezone,
           force_mp3: !!config.force_mp3,
           radio_force_mp3: !!config.radio_force_mp3,
+          volume_normalize: !!config.volume_normalize,
+          song_transition_offset: config.song_transition_offset ?? 0,
           external_search_enabled: !!config.external_search_enabled,
           external_search_url: config.external_search_url || '',
           external_search_token: config.external_search_token || '',
@@ -178,6 +180,20 @@ export function registerConfigHandlers(
       // 更新 radio_force_mp3（电台转码）
       if (body.radio_force_mp3 !== undefined) {
         config.radio_force_mp3 = !!body.radio_force_mp3;
+      }
+
+      // 更新 volume_normalize（音量均衡）
+      if (body.volume_normalize !== undefined) {
+        config.volume_normalize = !!body.volume_normalize;
+      }
+
+      // 更新 song_transition_offset（切歌偏移秒数，负数提前 / 正数推后）
+      // 夹到 ±30 秒，与前端输入框的同一区间（static/js/config.js）对齐
+      if (body.song_transition_offset !== undefined) {
+        const offset = Number(body.song_transition_offset);
+        if (Number.isFinite(offset)) {
+          config.song_transition_offset = Math.max(-30, Math.min(30, Math.round(offset)));
+        }
       }
 
       // 更新 external_search_url
