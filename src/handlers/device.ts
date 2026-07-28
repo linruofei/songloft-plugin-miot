@@ -339,6 +339,7 @@ export function registerDeviceHandlers(
       
       let state = 'unknown';
       let position = 0;
+      let positionFromDevice = false; // 设备是否真的上报了 play_song_detail.position
       let volume = cached?.volume ?? null; // 保留上次已知音量作为兜底，无数据时严格返回 null
 
       if (typeof info === 'string') {
@@ -360,15 +361,20 @@ export function registerDeviceHandlers(
           // 播放进度（云端返回毫秒，转换为秒）
           if (parsed.play_song_detail) {
             const d = parsed.play_song_detail;
-            if (typeof d.position === 'number') position = Math.floor(d.position / 1000);
+            if (typeof d.position === 'number') {
+              position = Math.floor(d.position / 1000);
+              positionFromDevice = true;
+            }
           }
         } catch (e: any) {
           songloft.log.warn('[/mina/status] 获取物理状态解析失败，触发降级保护: ' + String(e));
         }
       }
 
-      // 同步给宿主内部缓存（与旧接口共享同一个缓存池）
-      updateDeviceStatusCache(account_id, device_id, { state, position, volume: volume ?? undefined });
+      // 同步给宿主内部缓存（与旧接口共享同一个缓存池）。本端点定位是「物理探针」，
+      // 响应里的 position 保持设备裸值不加 seek 偏移；positionFromDevice 让共享缓存的
+      // 另一个消费者（resolvePlayerStatus）知道该值需要补偏移才是曲内绝对位置。
+      updateDeviceStatusCache(account_id, device_id, { state, position, positionFromDevice, volume: volume ?? undefined });
 
       return jsonResponse({
         success: true,

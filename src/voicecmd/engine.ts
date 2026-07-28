@@ -1706,7 +1706,8 @@ export class VoiceEngine {
       // 超时退出：设备一直在播放，说明已自动恢复，仅重置切歌定时器
       // 不发送 play 命令，避免部分设备（如 L15A）收到多余指令后从头播放
       songloft.log.info('[VoiceEngine] Device auto-resumed, resetting timer only');
-      pm.resetAutoNextTimer(lastDevicePosition);
+      // 设备给的是流内偏移，带 seek 续播时要补回曲内绝对位置
+      pm.resetAutoNextTimer(lastDevicePosition + pm.getStreamSeekOffsetSec());
       return;
     }
 
@@ -1716,9 +1717,13 @@ export class VoiceEngine {
       return;
     }
 
-    const ok = await pm.replayCurrent();
+    // 设备端媒体上下文已被语音打断清掉，只能重推 URL。带上位置让服务端产出以该处为开头的流，
+    // 不再从头重播整首（songloft-org/songloft-plugin-miot#60）。优先用设备实测位置；
+    // 设备不上报 play_song_detail 时退化为本地挂钟位置（会多跳过语音交互那几秒，仍好过从 0 开始）。
+    const replayFrom = lastDevicePosition > 0 ? lastDevicePosition + pm.getStreamSeekOffsetSec() : pm.getPosition();
+    const ok = await pm.replayCurrent(replayFrom);
     if (ok) {
-      songloft.log.info('[VoiceEngine] Playback restored via replay after voice interaction');
+      songloft.log.info(`[VoiceEngine] Playback restored via replay after voice interaction seek=${replayFrom.toFixed(1)}s`);
     } else {
       songloft.log.warn('[VoiceEngine] Failed to restore playback after voice interaction');
       await pm.stop();

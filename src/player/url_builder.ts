@@ -28,13 +28,16 @@ export class URLBuilder {
    * @param options.radioForceMp3 电台转码：仅对 type=radio 的歌曲追加 radio_transcode=mp3，
    *   让服务端把电台流实时转码为 MP3（部分音箱无法解码 AAC/HE-AAC 或不支持 HLS）。
    *   与 forceMp3 刻意分离，互不影响。
+   * @param options.seekSeconds 从第 N 秒起播：追加 seek=N，服务端产出以该位置为开头的 MP3 流。
+   *   音箱只会从头拉 URL，续播位置只能这样表达（songloft-org/songloft-plugin-miot#60）。
+   *   电台（直播）无位置概念，自动忽略。
    * @returns 播放 URL（相对路径会自动附加 access_token）
    */
   static async buildSongURL(song: {
     id?: number;
     url?: string;
     type?: string;
-  }, options?: { forceMp3?: boolean; radioForceMp3?: boolean; normalize?: boolean }): Promise<string> {
+  }, options?: { forceMp3?: boolean; radioForceMp3?: boolean; normalize?: boolean; seekSeconds?: number }): Promise<string> {
     const songUrl = song.url || '';
 
     if (!songUrl) {
@@ -68,6 +71,12 @@ export class URLBuilder {
       if (!options?.forceMp3) {
         url += '&format=mp3';
       }
+    }
+    // 起播位置：整数秒，避免小数点掺进上述「& 被替换成空格后按 k=v 还原」的解析。
+    // 电台是直播流，服务端也会忽略，这里就不往 URL 里塞无效参数。
+    const seek = Math.floor(options?.seekSeconds || 0);
+    if (seek > 0 && song.type !== 'radio') {
+      url += '&seek=' + seek;
     }
 
     if (isLoopbackUrl(url)) {

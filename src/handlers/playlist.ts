@@ -46,6 +46,9 @@ interface DeviceStatusCache {
   duration: number;  // 秒
   timestamp: number;
   volumeLockedUntil: number;  // 用户显式设置音量后锁定期截止时间戳
+  // position 是否真的来自设备的 play_song_detail（而非本地推算/动作后的乐观写入）。
+  // 只有设备实测位置才允许回写本地进度，见 syncManagerFromDeviceState。
+  positionFromDevice: boolean;
 }
 const deviceStatusCache: Map<string, DeviceStatusCache> = new Map();
 const deviceStatusInflight: Map<string, Promise<any>> = new Map();
@@ -62,6 +65,8 @@ export function updateDeviceStatusCache(accountId: string, deviceId: string, dat
     duration: data.duration ?? existing?.duration ?? 0,
     timestamp: Date.now(),
     volumeLockedUntil: data.lockVolume ? Date.now() + 10000 : (existing?.volumeLockedUntil ?? 0),
+    // 外部写入（播放/暂停/停止动作后的乐观刷新）给的都是本地推算位置，不是设备实测
+    positionFromDevice: data.positionFromDevice ?? false,
   });
 }
 
@@ -92,11 +97,17 @@ function syncManagerFromDeviceState(
   localState: PlayState,
   deviceState: string,
   devicePosition: number,
+  deviceReportsProgress: boolean,
 ): void {
   // 小爱在 URL/MUSIC 播放模式下会偶发把正常播放的流上报成 paused/stopped。
   // 读状态接口不能因此清掉本地自动切歌定时器；只有设备确认在播放时才用它校准恢复。
   if (localState === 'paused' && deviceState === 'playing') {
-    manager.resetAutoNextTimer(devicePosition);
+    // 只认「设备真的在推进」的上报。部分型号暂停后会持续上报 status=1 且不带
+    // play_song_detail（位置退化为 0），此时校准会把已暂停播放器的 playStartTimeMs 改写成「现在」，
+    // 导致网页进度条归零、续播位置算错（songloft-org/songloft-plugin-miot#60）。
+    if (deviceReportsProgress) {
+      manager.resetAutoNextTimer(devicePosition);
+    }
   } else if (localState === 'playing' && deviceState === 'playing' && manager.isVoiceSuspended()) {
     manager.resetAutoNextTimer(devicePosition);
   } else if (localState === 'playing' && deviceState === 'playing') {
@@ -150,21 +161,27 @@ export async function resolvePlayerStatus(
   const cacheKey = account_id + ':' + device_id;
   const now = Date.now();
 
+  // 带 seek 的续播流对设备是「从 0 开始的新流」，它上报的 position 只是流内偏移；
+  // 加上偏移才是曲内绝对位置。不补的话续播后进度条会掉回 0（songloft-org/songloft-plugin-miot#60）。
+  const seekOffset = manager.getStreamSeekOffsetSec();
+
   // 检查设备状态缓存（4秒内直接复用，避免多调用方重复查询设备）
   const cached = deviceStatusCache.get(cacheKey);
   if (cached && (now - cached.timestamp) < DEVICE_STATUS_TTL) {
     const duration = localStatus.duration > 0 ? localStatus.duration : cached.duration;
+    const cachedAbsPosition = cached.positionFromDevice ? cached.position + seekOffset : cached.position;
 
     // 播放中时用缓存position + 已过时间推算当前位置，避免返回过时进度
-    let position = cached.position;
+    let position = cachedAbsPosition;
     if (cached.state === 'playing' && duration > 0) {
       const elapsed = (now - cached.timestamp) / 1000;
-      position = Math.min(cached.position + elapsed, duration);
+      position = Math.min(cachedAbsPosition + elapsed, duration);
     }
 
     // 用被查询设备的物理进度校准共享切歌定时器。分组下无论查询哪个成员都可校准
     // （成员播放同一首、进度相近，校准收敛）；已有的近末尾/重拉守卫防止异常重置。
-    syncManagerFromDeviceState(manager, localStatus.state, cached.state, cached.position);
+    syncManagerFromDeviceState(manager, localStatus.state, cached.state, cachedAbsPosition,
+      cached.positionFromDevice && cached.position > 0);
 
     // 本地已 stop 时，不让设备残留的播放状态覆盖，避免前端进度条跳动
     const reportState = resolveReportState(localStatus.state, cached.state);
@@ -178,6 +195,7 @@ export async function resolvePlayerStatus(
   let realPosition = localStatus.position;
   let realDuration = localStatus.duration;
   let realState = localStatus.state;
+  let devicePosition = -1; // 设备 play_song_detail 上报的流内位置，-1 = 未上报
   try {
     const raw = await getOrFetchDeviceStatus(account_id, device_id, () => minaService.getPlayerStatus(account_id, device_id));
     const info = raw?.data?.info;
@@ -193,7 +211,11 @@ export async function resolvePlayerStatus(
       else if (parsed.status === 0) realState = 'stopped';
       if (parsed.play_song_detail) {
         const d = parsed.play_song_detail;
-        if (typeof d.position === 'number') realPosition = Math.floor(d.position / 1000);
+        if (typeof d.position === 'number') {
+          devicePosition = Math.floor(d.position / 1000);
+          // seek 流从曲内 seekOffset 秒开始，设备给的是流内偏移，补成曲内绝对位置
+          realPosition = devicePosition + seekOffset;
+        }
         if (typeof d.duration === 'number') realDuration = Math.floor(d.duration / 1000);
       }
     }
@@ -207,10 +229,19 @@ export async function resolvePlayerStatus(
     realDuration = localStatus.duration;
   }
 
-  // 更新缓存
-  deviceStatusCache.set(cacheKey, { volume, state: realState, position: realPosition, duration: realDuration, timestamp: now, volumeLockedUntil: cached?.volumeLockedUntil ?? 0 });
+  // 更新缓存。position 存设备原始的流内偏移（未加 seekOffset）：偏移会随下一次重推变化，
+  // 缓存里留裸值、读取时再补，才不会在切歌/续播后拿到被旧偏移污染的位置。
+  deviceStatusCache.set(cacheKey, {
+    volume,
+    state: realState,
+    position: devicePosition >= 0 ? devicePosition : realPosition,
+    duration: realDuration,
+    timestamp: now,
+    volumeLockedUntil: cached?.volumeLockedUntil ?? 0,
+    positionFromDevice: devicePosition >= 0,
+  });
 
-  syncManagerFromDeviceState(manager, localStatus.state, realState, realPosition);
+  syncManagerFromDeviceState(manager, localStatus.state, realState, realPosition, devicePosition > 0);
 
   // 本地已 stop 时，不让设备残留的播放状态覆盖
   const reportState = resolveReportState(localStatus.state, realState);

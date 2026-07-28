@@ -81,6 +81,10 @@ export class PlaylistManager {
   private pendingTempArtist: string = ''; // 待恢复的临时歌手名（索引就绪后自动恢复）
   private _lastLoadNotFound: boolean = false; // 上次 loadPlaylistSongs 失败是否因歌单不存在(ID 过期)
   private hardStopped: boolean = false; // 上次暂停被设备忽略而升级为 stop：设备端已无媒体上下文，续播需重推 URL
+  private pausedPositionSec: number = 0; // 暂停瞬间的曲内位置，硬停后据此重推带 seek 的 URL 续播
+  // 当前推给设备的流从歌曲第几秒开始。带 seek 的流对音箱是「从 0 开始的新流」，
+  // 它上报的 position 只是流内偏移；加上本值才是曲内绝对位置（消费点见 handlers/playlist.ts）。
+  private streamSeekOffsetSec: number = 0;
   // 输出目标设备集合：独立设备时仅含自身；分组时含组内全部成员。
   // 一个分组共用一个 PlaylistManager（同一套队列/索引/播放模式/定时器/随机数），
   // 播放/暂停/停止/切歌等指令统一下发给 targets 里的所有音箱，从根本上保证多房间同步、随机不跑偏。
@@ -279,6 +283,13 @@ export class PlaylistManager {
    * 只要有一台被硬停，就记下 hardStopped——设备端媒体上下文已丢失，续播必须重推 URL。
    */
   async pause(): Promise<void> {
+    // 先抓位置：getPosition() 在 state !== 'playing' 时恒返回 0，改状态之后就取不到了。
+    // 硬停续播靠它跳回原处（songloft-org/songloft-plugin-miot#60）。
+    // 判 playing 是为了让重复暂停不把已记下的位置擦成 0。
+    if (this.state === 'playing') {
+      this.pausedPositionSec = this.getPosition();
+    }
+
     this.stopCheckTimer();
     this.clearVoiceSuspend();
     this.state = 'paused';
@@ -295,7 +306,7 @@ export class PlaylistManager {
     }));
     this.hardStopped = results.includes('stopped');
 
-    songloft.log.info(`[PlaylistManager] Playback paused results=${results.join(',')} hardStopped=${this.hardStopped}`);
+    songloft.log.info(`[PlaylistManager] Playback paused results=${results.join(',')} hardStopped=${this.hardStopped} position=${this.pausedPositionSec.toFixed(1)}s`);
   }
 
   /**
@@ -306,6 +317,8 @@ export class PlaylistManager {
     this.clearVoiceSuspend();
     this.state = 'stopped';
     this.playStartTimeMs = 0;
+    this.pausedPositionSec = 0;
+    this.streamSeekOffsetSec = 0;
 
     await this.forEachTarget('stop', t => this.minaService.stopPlay(t.account_id, t.device_id));
 
@@ -496,10 +509,12 @@ export class PlaylistManager {
     }
 
     // 上次暂停被设备忽略而升级为 stop：设备端已无媒体上下文，play 指令续不回来，
-    // 交由上层回退到「重推当前歌曲 URL」（从头播）。
+    // 只能重推 URL。带上 seek 让服务端产出以暂停位置为开头的流，听感即「原位续播」
+    // （songloft-org/songloft-plugin-miot#60）。分组时哪怕只有一台被硬停也全组重推，
+    // 让本来正常 paused 的成员一起对齐到同一位置——多房间同步优先于少一次重推。
     if (this.hardStopped) {
-      songloft.log.info('[PlaylistManager] Resume after hard stop, needs replay');
-      return false;
+      songloft.log.info(`[PlaylistManager] Resume after hard stop, replay with seek=${this.pausedPositionSec.toFixed(1)}s`);
+      return this.playCurrent({ seekSeconds: this.pausedPositionSec });
     }
 
     this.stopCheckTimer();
@@ -557,6 +572,8 @@ export class PlaylistManager {
     this.clearVoiceSuspend();
     this.state = 'idle';
     this.playStartTimeMs = 0;
+    this.pausedPositionSec = 0;
+    this.streamSeekOffsetSec = 0;
   }
 
   /**
@@ -618,9 +635,15 @@ export class PlaylistManager {
    * 重新推送当前歌曲 URL 到设备（用于语音打断后恢复）
    * 与 resumePlayback() 不同，这里重新发送 URL 而非简单 resume，
    * 因为被语音唤醒打断后设备的 URL 播放状态已被清除。
+   * @param seekSeconds 曲内起播位置；传 0/省略即从头重播（旧行为）
    */
-  async replayCurrent(): Promise<boolean> {
-    return this.playCurrent();
+  async replayCurrent(seekSeconds = 0): Promise<boolean> {
+    return this.playCurrent({ seekSeconds });
+  }
+
+  /** 当前推给设备的流从歌曲第几秒开始（设备上报的 position 需加此值才是曲内绝对位置） */
+  getStreamSeekOffsetSec(): number {
+    return this.streamSeekOffsetSec;
   }
 
   /**
@@ -713,8 +736,11 @@ export class PlaylistManager {
 
   /**
    * 播放当前索引的歌曲
+   * @param opts.seekSeconds 曲内起播位置（秒）。服务端会产出以该位置为开头的 MP3 流，
+   *   用于「设备端媒体上下文已丢失、只能重推 URL」的续播场景（硬停续播、语音打断恢复）。
+   *   其余调用方不传即从头播，并顺带把 seek 状态清零。
    */
-  private async playCurrent(): Promise<boolean> {
+  private async playCurrent(opts?: { seekSeconds?: number }): Promise<boolean> {
     if (this.currentIndex < 0 || this.currentIndex >= this.songs.length) {
       songloft.log.error('[PlaylistManager] Invalid current index: ' + this.currentIndex);
       return false;
@@ -723,6 +749,12 @@ export class PlaylistManager {
     this.stopCheckTimer();
 
     const song = this.songs[this.currentIndex];
+    // 起播位置夹到 [0, duration-3)：贴近结尾的 seek 会让服务端零输出并降级成整首重播，
+    // 与服务端 parseSeekSeconds 的守卫同源。电台是直播流，没有曲内位置可言。
+    let seekSeconds = Math.max(0, Math.floor(opts?.seekSeconds || 0));
+    if (song.type === 'radio' || (song.duration > 0 && seekSeconds >= song.duration - 3)) {
+      seekSeconds = 0;
+    }
 
     // 检查服务器地址
     const serverHost = getHostBaseUrl();
@@ -738,13 +770,13 @@ export class PlaylistManager {
     const normalize = !!config.volume_normalize;
 
     // 构造播放URL
-    const songURL = await URLBuilder.buildSongURL(song, { forceMp3, radioForceMp3, normalize });
+    const songURL = await URLBuilder.buildSongURL(song, { forceMp3, radioForceMp3, normalize, seekSeconds });
     if (!songURL) {
       songloft.log.error('[PlaylistManager] Failed to build song URL: ' + song.title);
       return false;
     }
 
-    songloft.log.info(`[PlaylistManager] Playing song index=${this.currentIndex} title=${song.title} artist=${song.artist} duration=${song.duration} targets=${this.targets.length}`);
+    songloft.log.info(`[PlaylistManager] Playing song index=${this.currentIndex} title=${song.title} artist=${song.artist} duration=${song.duration} seek=${seekSeconds} targets=${this.targets.length}`);
 
     // 下发到所有目标设备（分组时为组内全部音箱；传结构化歌曲信息供触屏歌词模式匹配曲库）。
     // 至少一台成功即视为成功；个别成员离线/失败不影响整组继续（自动切歌定时器仍以本机时长驱动）。
@@ -760,12 +792,15 @@ export class PlaylistManager {
     this.clearVoiceSuspend();
     this.state = 'playing';
     this.hardStopped = false;
-    this.playStartTimeMs = Date.now();
+    this.pausedPositionSec = 0;
+    this.streamSeekOffsetSec = seekSeconds;
+    // 从第 seekSeconds 秒起播：把起播时间戳往前挪，getPosition() 直接给出曲内绝对位置
+    this.playStartTimeMs = Date.now() - seekSeconds * 1000;
 
-    // 如果歌曲时长有效，注册定时器播放下一首
+    // 如果歌曲时长有效，注册定时器播放下一首（seek 起播时只等剩余时长）
     if (song.duration > 0) {
       const offset = config.song_transition_offset || 0;
-      const adjustedDuration = Math.max(1, song.duration + offset);
+      const adjustedDuration = Math.max(1, song.duration + offset - seekSeconds);
       this.startCheckTimer(adjustedDuration);
     } else {
       songloft.log.warn('[PlaylistManager] Song duration invalid, no auto-next timer: ' + song.duration);
