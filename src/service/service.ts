@@ -261,6 +261,28 @@ export class MinaService {
     }
   }
 
+  /**
+   * 读回设备真实音量并同步到本地配置（**不下发**任何音量指令）。
+   *
+   * 用于「小爱固件自己已经把音量调好了」的场景——语音口令「大声/小声一点」「音量调到 X」都由
+   * 固件原生处理，插件再算一次 ±10 下发就变成同一条口令调两次音量：用户听到小爱播报 15%，
+   * 界面却显示插件自己算出的 25%（songloft-org/songloft-plugin-miot#61）。
+   *
+   * @returns 设备真实音量 (0-100)，读取失败返回 -1
+   */
+  async syncVolumeFromDevice(accountId: string, deviceId: string): Promise<number> {
+    const volume = await this.getVolume(accountId, deviceId);
+    if (volume < 0) {
+      return -1;
+    }
+    try {
+      await this.accountManager.updateDeviceConfig(accountId, deviceId, { volume });
+    } catch (e) {
+      songloft.log.warn('[MinaService] Failed to save synced volume to config: ' + String(e));
+    }
+    return volume;
+  }
+
   // ===== TTS =====
 
   /**
@@ -350,6 +372,31 @@ export class MinaService {
       songloft.log.error('[MinaService] getPlayerStatus failed: ' + String(e));
       return null;
     }
+  }
+
+  /**
+   * 获取设备播放状态并解析出 status / position。
+   *
+   * ubus 响应形如 `{ data: { info: '{"status":1,"volume":50,"play_song_detail":{"position":12000}}' } }`：
+   * status 1=playing / 2=paused / 0=stopped，-1 表示拿不到；position 为**流内**偏移（秒），
+   * 带 seek 的流要加上 PlaylistManager.getStreamSeekOffsetSec() 才是曲内绝对位置。
+   * 设备不上报 play_song_detail 时 position 退化为 0（此时别拿它当「真在开头」用）。
+   */
+  async getPlayState(accountId: string, deviceId: string): Promise<{ status: number; position: number }> {
+    const raw = await this.getPlayerStatus(accountId, deviceId);
+    let status = -1;
+    let position = 0;
+    const info = (raw?.data as any)?.info;
+    if (typeof info === 'string') {
+      try {
+        const parsed = JSON.parse(info);
+        if (typeof parsed.status === 'number') status = parsed.status;
+        if (parsed.play_song_detail && typeof parsed.play_song_detail.position === 'number') {
+          position = Math.floor(parsed.play_song_detail.position / 1000);
+        }
+      } catch {}
+    }
+    return { status, position };
   }
 
   // ===== 内部辅助方法 =====

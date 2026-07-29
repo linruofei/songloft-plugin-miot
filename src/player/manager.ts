@@ -74,6 +74,12 @@ export class PlaylistManager {
   private totalSongs: number = 0;
   private playStartTimeMs: number = 0;  // 当前歌曲开始播放的时间戳(ms)
   private randomPlayed: Set<number> = new Set(); // 随机模式已播放索引
+  // 已定好的下一首索引，-1 = 还没定。随机模式下 getNextIndex() 每次调用都重新摇骰子，
+  // 于是「预热的那首」和「真正播的那首」是两首不同的歌，预热等于白做
+  // （songloft-org/songloft-plugin-miot#61：开了音量均衡后每首歌都要冷启动整首 loudnorm，
+  // 表现为前 20 多秒空白 + 尾部被砍）。改为先定后用：reserveNextIndex() 定一次，
+  // 预热与自动切歌共用同一个结果。
+  private pendingNextIndex: number = -1;
   private voiceSuspendedAt: number = 0; // suspendForVoiceInteraction 首次调用时间戳
   private tempPlaylistName: string = ''; // 临时歌单名称（如"歌手: 周杰伦"），playlistId < 0 时有效
   private readonly tempId: number; // 该 manager 的固定临时歌单 ID（构造时分配，生命周期内复用）
@@ -147,6 +153,7 @@ export class PlaylistManager {
     }
     this.playMode = mode || 'order';
     this.randomPlayed = new Set();
+    this.clearPendingNextIndex();
 
     // 开始播放当前歌曲
     const ok = await this.playCurrent();
@@ -208,6 +215,7 @@ export class PlaylistManager {
     this.currentIndex = startIndex;
     this.playMode = mode || 'order';
     this.randomPlayed = new Set();
+    this.clearPendingNextIndex();
 
     const ok = await this.playCurrent();
     if (!ok) {
@@ -246,6 +254,7 @@ export class PlaylistManager {
     this.currentIndex = (startIndex >= 0 && startIndex < songs.length) ? startIndex : 0;
     this.playMode = mode;
     this.randomPlayed = new Set();
+    this.clearPendingNextIndex();
 
     const ok = await this.playCurrent();
     if (!ok) {
@@ -336,7 +345,8 @@ export class PlaylistManager {
       return false;
     }
 
-    const nextIdx = this.getNextIndex();
+    // 用已定好的那首：随机模式下它已经被 prefetchNextSong 预热过，手动切歌也能秒开
+    const nextIdx = this.reserveNextIndex();
     if (nextIdx < 0) {
       songloft.log.info('[PlaylistManager] No next song, stopping');
       await this.stop();
@@ -381,6 +391,8 @@ export class PlaylistManager {
    */
   async setPlayMode(mode: PlayMode): Promise<void> {
     this.playMode = mode;
+    // 已定好的下一首是按旧模式算的，换模式后必须作废重算（如 order → random）
+    this.clearPendingNextIndex();
 
     // 切换到随机模式时重置已播放记录
     if (mode === 'random') {
@@ -502,6 +514,10 @@ export class PlaylistManager {
    * 恢复播放（使用 play 接口继续，不重发 URL）
    * 用于语音命令（如调音量）中断 URL 播放后恢复
    * 同时重置切歌定时器以补偿暂停时间
+   *
+   * play 指令下发成功 **不等于** 播放真的续上了：校验放在后台异步做（见 verifyResumeOrRepush），
+   * 没续上就带位置重推 URL。**不能**让调用方同步等这个校验——网页端的播放按钮
+   * （`POST /player/toggle` → handlers/playlist.ts）会跟着从 ~100ms 变成 ~1.3s，手感明显发木。
    */
   async resumePlayback(): Promise<boolean> {
     if ((this.state !== 'playing' && this.state !== 'paused') || this.songs.length === 0) {
@@ -519,6 +535,9 @@ export class PlaylistManager {
 
     this.stopCheckTimer();
 
+    // 续播位置在改 state 之前算：getPosition() 在非 playing 态恒返回 0
+    const resumeFromSec = this.state === 'paused' ? this.pausedPositionSec : this.getPosition();
+
     const ok = await this.forEachTarget('resume', t => this.minaService.resumePlay(t.account_id, t.device_id));
     if (!ok) {
       songloft.log.warn('[PlaylistManager] resumePlay failed');
@@ -526,6 +545,13 @@ export class PlaylistManager {
     }
 
     this.state = 'playing';
+
+    // 后台校验设备是否真的在放，没续上就带位置重推 URL。不 await：调用方（网页播放按钮）
+    // 不该为此干等，而且此刻 resume 指令已经发出去了，晚 2 秒再补救不影响正常情况的听感。
+    // 必须自带 catch：游离的 promise 抛出会变成 QuickJS 里的 unhandled rejection。
+    void this.verifyResumeOrRepush(resumeFromSec).catch(e => {
+      songloft.log.warn('[PlaylistManager] Resume verify failed: ' + String(e));
+    });
 
     const song = this.getCurrentSong();
     if (song && song.duration > 0 && this.playStartTimeMs > 0) {
@@ -538,6 +564,51 @@ export class PlaylistManager {
     }
 
     return true;
+  }
+
+  /**
+   * 后台校验 resume 是否真的生效，没生效就带位置重推 URL。
+   *
+   * 为什么必须校验：`player_play_operation` 的 ubus 应答是
+   * `code=0 message="Msg has been successfully proxy to the device"`——它只说明**云端把消息代理给了设备**，
+   * 与播放是否续上无关。被小爱语音唤醒打断后设备端媒体上下文往往已失效，一条裸 play 续不回来，
+   * 而旧实现看到 ubus 成功就返回 true，于是本地状态停在 playing、切歌定时器照跑，
+   * 用户听到的是「播放继续数秒但没声音，直到切歌才有声音」（songloft-org/songloft-plugin-miot#61 问题 3）。
+   *
+   * 只探 2 次（最多 ~2.4s）：真续上的设备第一次就报 status=1；探失败的代价只是多一次带位置的重推
+   * （听感是一下小卡顿），远小于让用户干等整首歌的静音。
+   * 只查主设备：分组成员各自的媒体上下文无法逐台补救，主设备没续上就整组重推 URL 对齐。
+   * status 拿不到（-1，网络抖动 / 云端 502）时**按成功处理**——宁可少一次重推，也不要
+   * 因为一次查询失败就把好端端在放的歌打断重来。
+   *
+   * @param resumeFromSec resume 那一刻的曲内位置。重推时刻意仍用它（而不是加上校验耗掉的 2 秒）：
+   *   宁可重听 2 秒，也不要跳过用户还没听到的内容。
+   */
+  private async verifyResumeOrRepush(resumeFromSec: number): Promise<void> {
+    // 记下当时在放哪一首：校验期间用户可能切歌/换歌单，那就不该再插一脚
+    const indexAtResume = this.currentIndex;
+    const songIdAtResume = this.getCurrentSong()?.id ?? 0;
+
+    for (let i = 0; i < 2; i++) {
+      await new Promise(r => setTimeout(r, 1200));
+      // 期间被别的操作接管（暂停 / 切歌 / 停止）就不必再验
+      if (this.state !== 'playing' || this.currentIndex !== indexAtResume) return;
+
+      const { status } = await this.minaService.getPlayState(this.accountId, this.deviceId);
+      if (status === 1) return;
+      if (status < 0) {
+        songloft.log.warn('[PlaylistManager] Resume verify: device status unavailable, assuming resumed');
+        return;
+      }
+    }
+
+    // 两次都不在放：重推前再确认一次上下文没变（最后一次查询也可能耗掉几百毫秒）
+    if (this.state !== 'playing' || this.currentIndex !== indexAtResume ||
+        (this.getCurrentSong()?.id ?? 0) !== songIdAtResume) {
+      return;
+    }
+    songloft.log.warn(`[PlaylistManager] Device did not actually resume, re-pushing URL with seek=${resumeFromSec.toFixed(1)}s`);
+    await this.playCurrent({ seekSeconds: resumeFromSec });
   }
 
   /**
@@ -574,6 +645,7 @@ export class PlaylistManager {
     this.playStartTimeMs = 0;
     this.pausedPositionSec = 0;
     this.streamSeekOffsetSec = 0;
+    this.clearPendingNextIndex();
   }
 
   /**
@@ -657,6 +729,7 @@ export class PlaylistManager {
     this.playlistId = playlistId;
     this.state = 'idle';
     this.randomPlayed = new Set();
+    this.clearPendingNextIndex();
   }
 
   /**
@@ -673,6 +746,7 @@ export class PlaylistManager {
     this.pendingTempArtist = '';
     this.state = 'idle';
     this.randomPlayed = new Set();
+    this.clearPendingNextIndex();
   }
 
   // ===== 私有方法 =====
@@ -747,6 +821,9 @@ export class PlaylistManager {
     }
 
     this.stopCheckTimer();
+    // 当前歌曲要变了：作废上一首定好的「下一首」，末尾的 prefetchNextSong 会基于新的
+    // currentIndex 重新定一次，预热的与真会播的始终是同一首。
+    this.clearPendingNextIndex();
 
     const song = this.songs[this.currentIndex];
     // 起播位置夹到 [0, duration-3)：贴近结尾的 seek 会让服务端零输出并降级成整首重播，
@@ -817,9 +894,12 @@ export class PlaylistManager {
    * force_mp3 开启时给 prefetch URL 也追加 format=mp3，使预热的转码产物与真实播放 URL
    * （buildSongURL 的 &format=mp3）命中同一缓存键；否则预热的是源格式、播放要 mp3，
    * 切歌时 mp3 转码仍冷启动，预热白做。
+   *
+   * 走 reserveNextIndex() 而非 getNextIndex()：随机模式下后者每次调用结果都不同，
+   * 预热的会是另一首歌（songloft-org/songloft-plugin-miot#61）。
    */
   private prefetchNextSong(): void {
-    const nextIdx = this.getNextIndex();
+    const nextIdx = this.reserveNextIndex();
     if (nextIdx < 0 || nextIdx === this.currentIndex) return;
 
     const nextSong = this.songs[nextIdx];
@@ -865,7 +945,32 @@ export class PlaylistManager {
   }
 
   /**
+   * 取「下一首」索引，并记住结果供后续调用复用。
+   *
+   * 存在的理由：随机模式下 getNextIndex() 是有随机性的，预热（prefetchNextSong）与真正切歌
+   * （advanceToNext / next）各调一次就会拿到两首不同的歌，预热永远热错人
+   * （songloft-org/songloft-plugin-miot#61）。先定后用把两者锁到同一首。
+   *
+   * 当前歌曲发生变化时必须调 clearPendingNextIndex() 作废——playCurrent 开头已统一处理。
+   */
+  private reserveNextIndex(): number {
+    if (this.pendingNextIndex >= 0 && this.pendingNextIndex < this.songs.length) {
+      return this.pendingNextIndex;
+    }
+    this.pendingNextIndex = this.getNextIndex();
+    return this.pendingNextIndex;
+  }
+
+  /** 作废已定好的下一首（歌单 / 播放模式 / 当前索引变了就必须调） */
+  private clearPendingNextIndex(): void {
+    this.pendingNextIndex = -1;
+  }
+
+  /**
    * 获取下一首索引（根据播放模式）
+   *
+   * 注意：random 分支有随机性且会写 randomPlayed，**不要**直接调用。
+   * 除 getPreviousIndex 这类不需要复用的场景外，一律走 reserveNextIndex()。
    * @returns 下一首索引，-1表示没有下一首
    */
   private getNextIndex(): number {
@@ -1014,7 +1119,9 @@ export class PlaylistManager {
       });
     }
 
-    const nextIdx = this.getNextIndex();
+    // 必须是 prefetchNextSong 预热过的那首（reserveNextIndex 已把两者锁到同一首），
+    // 否则随机模式下播的永远是没预热的歌，开了音量均衡就要冷启动整首 loudnorm。
+    const nextIdx = this.reserveNextIndex();
     if (nextIdx < 0) {
       songloft.log.info('[PlaylistManager] No next song, playback complete');
       this.state = 'stopped';
@@ -1041,8 +1148,8 @@ export class PlaylistManager {
       return;
     }
 
-    // 重试仍失败，尝试跳到下一首
-    const skipIdx = this.getNextIndex();
+    // 重试仍失败，尝试跳到下一首（上一句 playCurrent 已把 pending 清掉，这里会重新定一首）
+    const skipIdx = this.reserveNextIndex();
     if (skipIdx >= 0 && skipIdx !== this.currentIndex) {
       songloft.log.warn('[PlaylistManager] Retry failed, skipping to next song');
       this.currentIndex = skipIdx;

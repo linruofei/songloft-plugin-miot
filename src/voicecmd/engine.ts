@@ -1494,63 +1494,42 @@ export class VoiceEngine {
   }
 
   /**
-   * 执行设置音量（绝对值/相对值）
-   * @param param - 音量方向："absolute"|"up"|"down"
-   * @param argument - 口令关键词后的文本（用于提取数字）
+   * 音量口令后等固件把音量落定再读回的时间。
+   *
+   * 对话记录本身已比用户说话晚 1~2 秒（实测 addMessage 比 ts 晚约 1.3s），加上这一拍基本能保证
+   * 读到的是小爱调整后的值。万一读早了也只是这一轮缓存偏旧，4 秒后 /mina/status 穿透会自我纠正。
+   */
+  private static readonly VOLUME_SETTLE_MS = 800;
+
+  /**
+   * 处理音量口令：**不下发音量，只读回设备真实值**。
+   *
+   * 「大声/小声一点」「音量调到 X」这类口令小爱固件原生就会处理（f81e0fe 把音量从 AI 分析里
+   * 摘掉时已经认定「音响本身可实现」，只是规则匹配这条漏了）。插件再算一次 ±10 下发 player_set_volume
+   * 就成了同一条口令调两次音量，用户听到小爱播报 15% 而界面显示插件自己算出的 25%
+   * ——因为旧实现把**目标值**而非设备真实值写进了状态缓存并锁定 10 秒
+   * （songloft-org/songloft-plugin-miot#61 问题 2）。这条多余的 player_set_volume 同时也是
+   * 「调音量后静音」的触发点之一（同 issue 问题 3）。
+   *
+   * 分组仍需显式对齐：固件只调了听到口令的那台，组内其他成员靠 fanOutSetVolume 跟上。
+   *
+   * @param param - 音量方向："absolute"|"up"|"down"（保留入参用于日志，行为已不依赖它）
+   * @param argument - 口令关键词后的文本（同上，仅日志）
    */
   private async executeSetVolume(accountId: string, deviceId: string, param: string, argument: string): Promise<void> {
-    let currentVolume = 50;
+    await new Promise(r => setTimeout(r, VoiceEngine.VOLUME_SETTLE_MS));
 
-    if (param === 'up' || param === 'down') {
-      // 相对音量命令：查询设备实际音量，避免本地缓存过期
-      const realVolume = await this.minaService.getVolume(accountId, deviceId);
-      if (realVolume >= 0) {
-        currentVolume = realVolume;
-        songloft.log.info(`[VoiceEngine] Got real device volume: ${realVolume}`);
-      } else {
-        songloft.log.warn('[VoiceEngine] Failed to get real volume, falling back to config');
-        const devices = await this.configManager.getDevices(accountId);
-        const dev = devices.find(d => d.device_id === deviceId);
-        if (dev) {
-          currentVolume = dev.volume || 50;
-        }
-      }
+    const volume = await this.minaService.syncVolumeFromDevice(accountId, deviceId);
+    if (volume < 0) {
+      songloft.log.warn(`[VoiceEngine] Volume command handled by 小爱, but reading it back failed (param=${param} argument="${argument}")`);
+      return;
     }
 
-    let targetVolume: number;
-
-    switch (param) {
-      case 'up':
-        targetVolume = currentVolume + 10;
-        break;
-      case 'down':
-        targetVolume = currentVolume - 10;
-        break;
-      case 'absolute':
-      default: {
-        const volume = this.extractNumber(argument);
-        if (volume === null) {
-          songloft.log.warn(`[VoiceEngine] No volume number found in: ${argument}`);
-          return;
-        }
-        targetVolume = volume;
-        break;
-      }
-    }
-
-    // 限制范围 0-100
-    targetVolume = Math.max(0, Math.min(100, targetVolume));
-
-    songloft.log.info(`[VoiceEngine] Set volume: current=${currentVolume} target=${targetVolume} param=${param}`);
-
-    const ok = await this.minaService.setVolume(accountId, deviceId, targetVolume);
-    if (ok) {
-      updateDeviceStatusCache(accountId, deviceId, { volume: targetVolume, lockVolume: true });
-      await this.groupCoordinator?.fanOutSetVolume(accountId, deviceId, targetVolume);
-      songloft.log.info(`[VoiceEngine] Volume set to: ${targetVolume}`);
-    } else {
-      songloft.log.error(`[VoiceEngine] Failed to set volume: ${targetVolume}`);
-    }
+    // 读回值就是设备真相，不需要 lockVolume 去挡云端「旧值」——那把锁是为了保护
+    // 「插件刚下发、云端还没同步」的窗口，现在没有下发这一步了。
+    updateDeviceStatusCache(accountId, deviceId, { volume });
+    await this.groupCoordinator?.fanOutSetVolume(accountId, deviceId, volume);
+    songloft.log.info(`[VoiceEngine] Volume synced from device: ${volume} (handled by 小爱, not re-applied; param=${param})`);
   }
 
   /**
@@ -1653,26 +1632,6 @@ export class VoiceEngine {
   }
 
   /**
-   * 从 UBus player_get_play_status 响应中解析设备状态
-   * 响应格式：{ data: { info: '{"status":1,"volume":50,"play_song_detail":{"position":12000,...}}' } }
-   */
-  private parseDeviceStatus(raw: any): { status: number; position: number } {
-    let status = -1;
-    let position = 0;
-    const info = (raw?.data as any)?.info;
-    if (typeof info === 'string') {
-      try {
-        const parsed = JSON.parse(info);
-        if (typeof parsed.status === 'number') status = parsed.status;
-        if (parsed.play_song_detail && typeof parsed.play_song_detail.position === 'number') {
-          position = Math.floor(parsed.play_song_detail.position / 1000);
-        }
-      } catch {}
-    }
-    return { status, position };
-  }
-
-  /**
    * 等待小爱 TTS 播报结束后重新推送当前歌曲 URL
    */
   private async smartResume(pm: import('../player/manager').PlaylistManager, accountId: string, deviceId: string): Promise<void> {
@@ -1689,8 +1648,7 @@ export class VoiceEngine {
     while (Date.now() - startTime < maxWaitMs) {
       if (!pm.isPlaying() || this.resumeCancelled) return;
 
-      const raw = await this.minaService.getPlayerStatus(accountId, deviceId);
-      const deviceStatus = this.parseDeviceStatus(raw);
+      const deviceStatus = await this.minaService.getPlayState(accountId, deviceId);
       if (deviceStatus.status !== 1) {
         deviceBecameIdle = true;
         break;
@@ -1770,75 +1728,9 @@ export class VoiceEngine {
     return null;
   }
 
-  /**
-   * 从字符串中提取数字
-   * 支持阿拉伯数字和中文数字
-   */
-  private extractNumber(s: string): number | null {
-    if (!s) return null;
-
-    // 剥离"百分之"前缀，避免"百"被误解析为数字 100
-    const cleaned = s.replace(/百分之/g, '');
-
-    const target = cleaned || s;
-
-    // 优先尝试阿拉伯数字
-    const numMatch = target.match(/\d+/);
-    if (numMatch) {
-      return parseInt(numMatch[0], 10);
-    }
-
-    // 尝试中文数字
-    const cnMatch = target.match(/[零一二三四五六七八九十百千万]+/);
-    if (cnMatch) {
-      return this.parseChineseNumber(cnMatch[0]);
-    }
-
-    return null;
-  }
-
-  /**
-   * 将中文数字字符串转换为阿拉伯数字
-   * 支持：五十、一百、三十五、二百五十、十五 等常见表达
-   */
-  private parseChineseNumber(s: string): number | null {
-    if (!s) return null;
-
-    const digitMap: Record<string, number> = {
-      '零': 0, '一': 1, '二': 2, '三': 3, '四': 4,
-      '五': 5, '六': 6, '七': 7, '八': 8, '九': 9,
-      '十': 10, '百': 100, '千': 1000, '万': 10000,
-    };
-
-    const chars = Array.from(s);
-    let result = 0;
-    let current = 0;
-    let hasDigit = false;
-
-    for (const ch of chars) {
-      const val = digitMap[ch];
-      if (val === undefined) {
-        return null;
-      }
-      hasDigit = true;
-
-      if (val >= 10) {
-        // 遇到单位（十、百、千、万）
-        if (current === 0) {
-          // "十五" 省略了 "一" 的情况
-          current = 1;
-        }
-        result += current * val;
-        current = 0;
-      } else {
-        current = val;
-      }
-    }
-
-    // 处理末尾的数字（如 "五十三" 中的 "三"）
-    result += current;
-
-    if (!hasDigit) return null;
-    return result;
-  }
 }
+
+// extractNumber / parseChineseNumber 随 executeSetVolume 改为「只读回不下发」一并删除：
+// 它们唯一的用途是从「音量调到五十/百分之五十」里解析目标值，而现在目标值由小爱固件自己决定，
+// 插件不再需要理解口令里的数字（含 songloft-org/songloft#166 那个「百分之X」被解析成 100 的修复）。
+// 若将来发现某型号固件确实不原生处理音量、需要插件兜底下发，从 git 历史取回即可。
