@@ -505,11 +505,19 @@ export class MinaHTTPClient {
 
   /**
    * 获取最新对话记录（自动选择获取方式）
+   *
+   * 返回值区分两种「空」，调用方**不能**混为一谈：
+   * - `null`  → 取记录失败（token 失效 / 网络错误 / 非 200 / 解析失败 / 重试用尽）
+   * - `[]`    → 取记录成功，但该设备确实没有对话记录
+   *
+   * ConversationMonitor 的首轮基线建立依赖这个区分：把失败当成「没有记录」会让基线
+   * 停在 0，等取记录恢复后整批历史记录会被当作新消息重放（旧语音指令凭空执行）。
+   *
    * @param deviceId - 设备 ID
    * @param hardware - 设备硬件型号
    * @param limit - 记录数量限制（默认2）
    */
-  async getLatestAskFromXiaoai(deviceId: string, hardware: string, limit = 2): Promise<AskMessage[]> {
+  async getLatestAskFromXiaoai(deviceId: string, hardware: string, limit = 2): Promise<AskMessage[] | null> {
     if (isPollDebug()) songloft.log.info(`[ConversationMonitor] getLatestAskFromXiaoai deviceId=${deviceId} hardware=${hardware} limit=${limit} useMinaForAsk=${shouldUseMinaForAsk(hardware)}`);
     // 部分设备需要通过 ubus 方式获取
     if (shouldUseMinaForAsk(hardware)) {
@@ -533,7 +541,8 @@ export class MinaHTTPClient {
       if (isPollDebug()) songloft.log.info(`[ConversationMonitor] getLatestAskFromXiaoai attempt=${attempt} returned null, retrying...`);
     }
     songloft.log.info(`[ConversationMonitor] getLatestAskFromXiaoai all ${MAX_RETRIES} attempts failed`);
-    return [];
+    // 返回 null 而非 []：让调用方知道这是「取不到」，不是「没有记录」
+    return null;
   }
 
   // ===== 播放状态 =====
@@ -921,14 +930,18 @@ export class MinaHTTPClient {
   /**
    * 通过 UBus nlp_result_get 获取对话记录
    * 用于不支持 xiaoai API 的设备（如 M01）
+   *
+   * 返回值语义同 getLatestAskFromXiaoai：`null` = 取记录失败，`[]` = 确实没有记录
    */
-  private async getLatestAskByUbus(deviceId: string): Promise<AskMessage[]> {
+  private async getLatestAskByUbus(deviceId: string): Promise<AskMessage[] | null> {
     const result = await this.ubusRequest(deviceId, 'nlp_result_get', 'mibrain', {});
-    if (!result || !result.data) return [];
+    if (!result || !result.data) return null;
 
     try {
       const data = result.data as NlpResultData;
-      if (data.code !== 0 || !data.info) return [];
+      // code != 0 是设备侧报错（取不到），不是「没有对话」
+      if (data.code !== 0) return null;
+      if (!data.info) return [];
 
       const infoData = JSON.parse(data.info) as NlpInfoData;
       if (!infoData.result) return [];
@@ -940,7 +953,13 @@ export class MinaHTTPClient {
 
         try {
           const nlp = JSON.parse(item.nlp) as NlpDetail;
-          const timestamp = parseInt(nlp.meta.timestamp, 10) || 0;
+          // 时间戳解析失败时**必须跳过**，不能兜底成 0：0 永远小于去重基线，
+          // 该条会被静默吞掉且无任何日志（原实现 `|| 0` 的后果）
+          const timestamp = parseInt(nlp.meta?.timestamp ?? '', 10);
+          if (!Number.isFinite(timestamp) || timestamp <= 0) {
+            songloft.log.warn(`[ConversationMonitor] getLatestAskByUbus skip record with invalid timestamp device=${deviceId} raw=${String(nlp.meta?.timestamp)}`);
+            continue;
+          }
 
           // 转换为 AskMessage 格式（与 WASM 版一致）
           messages.push({
@@ -962,7 +981,8 @@ export class MinaHTTPClient {
 
       return messages;
     } catch {
-      return [];
+      // 解析失败属于「取不到」，返回 null 而非 []
+      return null;
     }
   }
 }
