@@ -898,7 +898,7 @@ export class VoiceEngine {
    * 非播放类命令执行后，尝试恢复被小爱语音唤醒中断的 URL 播放
    */
   private tryResumePlayback(commandType: string, wasPlaying: boolean, pm: import('../player/manager').PlaylistManager | null, accountId: string, deviceId: string): void {
-    const isNonPlaybackCommand = commandType === 'set_volume' || commandType === 'set_play_mode';
+    const isNonPlaybackCommand = commandType === 'set_volume' || commandType === 'set_play_mode' || commandType === 'favorite';
     if (!isNonPlaybackCommand || !wasPlaying || !pm) return;
 
     pm.suspendForVoiceInteraction();
@@ -1041,7 +1041,7 @@ export class VoiceEngine {
     const hint = this.buildExternalSearchHint(songName, artist);
     const priority = this.normalizeSearchPriority(config.search_priority);
     // warn 级：这是搜歌链路的入口锚点。插件日志默认都是 info，而宿主 log level 常被设为
-    // error/warn，导出的日志里一条插件记录都没有，问题完全不可定位
+    // error/warn，导出的日志���一条插件记录都没有，问题完全不可定位
     // （songloft-org/songloft-plugin-miot#62 的排查就卡在这）。
     songloft.log.warn(`[VoiceEngine] Play song priority=${priority} keyword="${songName}" localTerm="${searchTerm}"`);
 
