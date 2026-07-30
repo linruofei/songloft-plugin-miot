@@ -1278,18 +1278,29 @@ export class VoiceEngine {
   }
 
   /**
-   * 检查候选歌曲的 URL 是否有效。
-   * - 本地索引歌曲（local_index）不检查，URL 由插件内部管理。
-   * - 独立远程歌曲（remote_song）通过 range 请求验证，防止过期链接推送给音箱。
+   * 检查候选歌曲的 URL 是否有效——只对**外部直链**做，防止过期链接推送给音箱。
+   * 本地索引歌曲（local_index）与指向自家服务端的 URL 都直接放行。
    *
-   * 两个曾经把本地歌曲全部误判为「不健康」的坑（songloft-org/songloft-plugin-miot#62）：
+   * 这个函数以前恒定返回 false，是「响应优先总是播外部搜索结果」的直接原因
+   * （songloft-org/songloft-plugin-miot#62）。三个坑按顺序记下来，别再踩回去：
+   *
    * 1. 不要用 AbortController：QuickJS 沙盒里没有这个全局（宿主 polyfill 只提供 fetch /
    *    setTimeout / URL 等，见 internal/jsruntime/polyfill.go）。`new AbortController()` 会抛
-   *    ReferenceError，被本函数的 catch 吞掉后**恒定返回 false**，于是并行搜歌里每个本地候选
-   *    都被判死，不做体检的外部搜索结果无条件胜出。改用 X-Fetch-Timeout-Ms 头 + Promise.race，
-   *    与 online_searcher.ts 的带超时 fetch 同一套写法。
-   * 2. 探针必须走本机 API 地址（getHostAPIBaseUrl），不能用给音箱的 server_host——外网部署下
-   *    后者是一次 hairpin NAT 出网回环，容易失败或超过 3s。
+   *    ReferenceError，被本函数的 catch 吞掉后**恒定返回 false**，于是并行搜歌里每个
+   *    remote_song 候选都被判死，不做体检的外部搜索结果无条件胜出。改用
+   *    X-Fetch-Timeout-Ms 头 + Promise.race，与 online_searcher.ts 的带超时 fetch 同一套写法。
+   *
+   * 2. 不要探测自家服务端的 URL。后端 MarshalJSON 对所有类型都输出相对路径
+   *    `/api/v1/songs/{id}/play`，所以库里的歌**永远**走这一支，探它有两个害处：
+   *    - 未缓存的网络歌曲上，`Range: bytes=0-0` 会命中服务端的 206 分支并触发
+   *      `go onCacheMiss()`（internal/handlers/proxy.go:388），把整首歌后台下载完——
+   *      哪怕这个候选最终落败、这首歌根本没播；
+   *    - 竞速是 await 体检的，慢源会把整整 3 秒加到语音响应延迟上。
+   *    自家服务端能不能出声，交给真正播放时判断（playCurrent 失败会返回 false）。
+   *
+   * 3. 若将来真要探测，探针必须走本机 API 地址（getHostAPIBaseUrl）而不是给音箱用的
+   *    server_host——外网部署下后者是一次 hairpin NAT 出网回环，容易失败或超过预算。
+   *    并且探针不能带 format=mp3 / normalize=1，那会让服务端为一次探针启动 ffmpeg 冷启动。
    */
   private async isCandidateUrlHealthy(candidate: SongSearchCandidate): Promise<boolean> {
     if (candidate.source !== 'remote_song') return true;
@@ -1297,27 +1308,15 @@ export class VoiceEngine {
     const rawUrl = candidate.song.url || '';
     if (!rawUrl) return false;
 
-    // 外部直链 vs 指向自家服务端的相对路径（/api/v1/songs/{id}/play）。
-    const isExternalDirect = rawUrl.startsWith('http://') || rawUrl.startsWith('https://');
-
-    let probeUrl = rawUrl;
-    if (!isExternalDirect) {
-      try {
-        probeUrl = await URLBuilder.buildSongURL(candidate.song, { baseUrl: await getHostAPIBaseUrl() });
-      } catch (e) {
-        // 体检设施本身不可用，不该据此判死一首本地库里的歌。
-        songloft.log.warn(`[VoiceEngine] URL 体检跳过（拿不到本机 API 地址）: ${String(e)}`);
-        return true;
-      }
+    // 指向自家服务端的相对路径：不探测，直接放行（见上面第 2 条）。
+    if (!rawUrl.startsWith('http://') && !rawUrl.startsWith('https://')) {
+      return true;
     }
-    if (!probeUrl) return false;
 
-    // 探针刻意不带 format=mp3 / normalize=1：那会让服务端为一次探针启动 ffmpeg 冷启动，
-    // 几乎必然超过下面这个 3s 预算。
     const started = Date.now();
     try {
       const resp = await Promise.race([
-        fetch(probeUrl, {
+        fetch(rawUrl, {
           method: 'GET',
           headers: { Range: 'bytes=0-0', 'X-Fetch-Timeout-Ms': String(URL_HEALTH_CHECK_TIMEOUT_MS) },
         }),
@@ -1326,14 +1325,13 @@ export class VoiceEngine {
       ]);
       const ok = resp.ok || resp.status === 206;
       if (!ok) {
-        songloft.log.warn(`[VoiceEngine] URL 体检不通过 status=${resp.status} external=${isExternalDirect} (${Date.now() - started}ms): ${probeUrl.slice(0, 80)}`);
+        songloft.log.warn(`[VoiceEngine] 外部直链体检不通过 status=${resp.status} (${Date.now() - started}ms): ${rawUrl.slice(0, 80)}`);
       }
       return ok;
     } catch (e) {
-      // 超时/网络错：外部直链判死（本检查的原意就是防过期直链）；自家服务端放行——
-      // 大概率只是本机忙或正在转码，仍比一个随机外部搜索结果靠谱。
-      songloft.log.warn(`[VoiceEngine] URL 体检异常 external=${isExternalDirect} (${Date.now() - started}ms): ${String(e)} → ${isExternalDirect ? '判为不健康' : '放行'}`);
-      return !isExternalDirect;
+      // 外部直链超时/网络错就判死——本检查的原意就是防过期直链。
+      songloft.log.warn(`[VoiceEngine] 外部直链体检异常 (${Date.now() - started}ms): ${String(e)} → 判为不健康`);
+      return false;
     }
   }
 

@@ -515,6 +515,20 @@ export class IndexingManager {
   }
 
   /**
+   * 把已不存在的歌单从缓存里剪掉。
+   * 增量提交后缓存不再被整体替换，失效条目只能这样显式收敛。
+   */
+  private prunePlaylistCache(playlists: IndexedPlaylist[]): void {
+    const alive = new Set(playlists.map(p => p.id));
+    for (const id of Array.from(this.playlistSongsCache.keys())) {
+      if (!alive.has(id)) {
+        this.playlistSongsCache.delete(id);
+        this.playlistCacheLoadedIds.delete(id);
+      }
+    }
+  }
+
+  /**
    * 逐歌单加载并**增量提交**进正在使用的缓存。
    *
    * 刻意不用「影子 Map 加载完再整体替换」：那样中途被取代就一个歌单也留不下，
@@ -554,14 +568,7 @@ export class IndexingManager {
       // 收尾只有仍是当前轮次才做。被取代的旧轮次绝不能把 playlistCacheLoading 置回 false——
       // 新轮次正在跑，擦掉标志会让 waitForPlaylistCache 的兜底重复启动加载。
       if (token === this.playlistCacheToken) {
-        // 增量提交不再整体替换 Map，已删除的歌单需要显式收敛。
-        const alive = new Set(playlists.map(p => p.id));
-        for (const id of Array.from(this.playlistSongsCache.keys())) {
-          if (!alive.has(id)) {
-            this.playlistSongsCache.delete(id);
-            this.playlistCacheLoadedIds.delete(id);
-          }
-        }
+        this.prunePlaylistCache(playlists);
 
         // 只有「跑完了一遍当前已知的歌单集合」才算就绪。空集合 + 索引还没建起来
         // （playlists 尚未从宿主拉到）不能 latch：否则闩锁提前翻转，之后 refresh 带来
@@ -606,6 +613,9 @@ export class IndexingManager {
 
     this.playlistCacheSignature = signature;
     this.playlistCacheLoading = true;
+    // 新一轮本身就会覆盖全部歌单，清掉待补标记；否则「A 在飞 → schedule(同指纹) 置位
+    // → schedule(异指纹) 起 B」之后，B 收尾还会白跑一整轮 C。
+    this.playlistCacheRevalidate = false;
     const token = ++this.playlistCacheToken;
     this.runPlaylistCacheLoad(token, playlists).catch(e => {
       songloft.log.warn(`歌单歌曲缓存后台加载异常: ${e instanceof Error ? e.message : String(e)}`);
@@ -666,6 +676,9 @@ export class IndexingManager {
       this.lastRefreshTime = Date.now();
       this.indexReady = true;
 
+      // 已删除的歌单立刻从缓存里剪掉。改成增量提交后缓存不再被整体替换，若只等轮次收尾
+      // 才收敛，findSongsByArtist / findSongByName 会在整轮加载期间一直返回失效歌单的位置。
+      this.prunePlaylistCache(newPlaylists);
       this.schedulePlaylistCacheLoad(newPlaylists);
 
       songloft.log.info(`轻量索引构建完成: playlists=${newPlaylists.length} songs=${newSongs.length}, 歌单歌曲缓存后台加载已启动`);
@@ -730,6 +743,18 @@ export class IndexingManager {
   /** 歌单歌曲缓存是否已完整跑过一轮 */
   isPlaylistCacheReady(): boolean {
     return this.playlistCacheReady;
+  }
+
+  /**
+   * 缓存是否覆盖了**当前**这批歌单。
+   *
+   * 与 playlistCacheReady 的区别：后者是只升不降的闩锁，用于决定「要不要等」；
+   * 而「歌单集合变更后正在重新加载」或「某个歌单一直拉取失败」时闩锁仍为 true、
+   * 覆盖却是不完整的。判断「查不到位置到底是因为不在歌单里，还是因为缓存没到」
+   * 必须用这个，否则会打出「不在任何歌单」这种说反话的诊断日志（#62 就是被误导卡住的）。
+   */
+  private isPlaylistCacheComplete(): boolean {
+    return this.playlistCacheReady && this.playlistCacheLoadedIds.size >= this.playlists.length;
   }
 
   /**
@@ -948,12 +973,14 @@ export class IndexingManager {
         bestGlobal.titlePinyin, bestGlobal.artistPinyin, bestGlobal.albumPinyin,
       );
       if (bestGlobalScore >= MIN_MATCH_SCORE) {
-        // 两种情形要分清：缓存没赶上时我们其实**不知道**这首歌在不在歌单里，
+        // 两种情形要分清：缓存覆盖不全时我们其实**不知道**这首歌在不在歌单里，
         // 只是拿不出更好的答案；日志必须说明白，否则下次排查又要从零猜（#62）。
-        if (!cacheReady) {
+        // 判据用「覆盖是否完整」而不是 cacheReady——闩锁只升不降，歌单集合变更后
+        // 正在重新加载、或某个歌单一直拉取失败时它仍是 true。
+        if (!this.isPlaylistCacheComplete()) {
           songloft.log.warn(
-            `[IndexingManager] findSongByName (${elapsedMs}ms) 全局命中 "${bestGlobal.title}" 但歌单缓存未就绪` +
-            `(loaded=${this.playlistCacheLoadedIds.size}/${this.playlists.length})：无法确认是否在歌单中，退化为独立歌曲直推（无自动续播）`
+            `[IndexingManager] findSongByName (${elapsedMs}ms) 全局命中 "${bestGlobal.title}" 但歌单缓存覆盖不全` +
+            `(loaded=${this.playlistCacheLoadedIds.size}/${this.playlists.length}, waited=${cacheReady})：无法确认是否在歌单中，退化为独立歌曲直推（无自动续播）`
           );
         } else {
           songloft.log.warn(
