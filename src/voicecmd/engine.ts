@@ -62,6 +62,25 @@ type SongSearchCandidate =
   | { source: 'remote_song'; song: StandaloneSongCandidate }
   | { source: 'external_search'; song: OnlineSearchResult };
 
+/**
+ * 并行搜歌竞速里的一个待 settle 任务。
+ * slot 是任务在原数组里的下标：settle 后按 slot 精确剔除，保证同一个候选不会被试第二次。
+ */
+type PendingCandidateTask = {
+  slot: number;
+  promise: Promise<{ slot: number; candidate: SongSearchCandidate | null }>;
+};
+
+/**
+ * 竞速一轮的产出：胜出候选 + **尚未 settle 的其余任务**。
+ * rest 交回调用方，是为了让 parallel 模式在「胜出候选播不出来」时接着试别的源
+ * （见 executePlaySongParallel 的注释）。
+ */
+type SongCandidateRaceResult = {
+  candidate: SongSearchCandidate;
+  rest: PendingCandidateTask[];
+};
+
 /** 口令测试结果（供设置页「口令测试」展示） */
 export interface CommandTestResult {
   /** 是否匹配到口令 */
@@ -1222,6 +1241,22 @@ export class VoiceEngine {
     return await this.playSongCandidate(local, pm, searchTerm, songName, accountId, deviceId);
   }
 
+  /**
+   * 响应优先（parallel）：本地与外部搜索同时开跑，谁先给出可用候选就先播谁。
+   *
+   * 胜出候选**播放失败时要接着试其余候选**，语义与 executePlaySongExternalFirst 的回落对齐：
+   * 旧实现拿到一个候选就 all-in，设备拒绝 / 直链失效 / 上游挂了都会让用户直接听到
+   * 「未找到歌曲」，而另一个源可能明明是好的——三种策略里只有 parallel 缺这一步。
+   *
+   * 回落用的是**同一批已经在跑的任务**（firstSuccessfulSongCandidate 把未 settle 的任务原样
+   * 交回来），不是重新调 findXxxSongCandidate：重搜会二次打外部搜索接口，更要紧的是
+   * external_search 的播放路径有导入副作用（playSearchResult → importSong + 追加歌单 + 增量
+   * 索引），重搜后同一首歌可能被导入两遍。每个 slot 在 settle 时即从 pending 剔除，
+   * 循环次数上界 = 任务数，每个候选最多只试一次，不存在循环重试。
+   *
+   * 回落时**刻意不再** pm.prepareForNewPlayback() / minaService.stopPlay()：executePlaySong
+   * 进搜索前已经打断过一次，这里重复打断会掐掉上一个候选可能已经开始出声的流。
+   */
   private async executePlaySongParallel(
     songName: string,
     searchTerm: string,
@@ -1230,22 +1265,52 @@ export class VoiceEngine {
     accountId: string,
     deviceId: string,
   ): Promise<PlayedSong | null> {
-    const candidate = await this.firstSuccessfulSongCandidate([
+    let pending = this.pendingCandidateTasks([
       this.findLocalSongCandidate(searchTerm),
       this.findExternalSongCandidate(songName, hint),
     ]);
-    if (!candidate) {
-      return null;
+
+    // 上一个试过但播放失败的源；null 表示当前这次是首选而非回落。
+    let failedSource: SongSearchCandidate['source'] | null = null;
+
+    while (pending.length > 0) {
+      const race = await this.firstSuccessfulSongCandidate(pending);
+      if (!race) {
+        break;
+      }
+      pending = race.rest;
+
+      if (failedSource === null) {
+        // warn 级：这一行直接回答「为什么播的是外部搜索结果而不是本地歌曲」。
+        songloft.log.warn(`[VoiceEngine] Parallel search selected source=${race.candidate.source}`);
+      } else {
+        // warn 级：回落必须能只凭 warn 日志看出「从哪个源换到哪个源、为什么换」。插件日志
+        // 默认走 info，而宿主 log level 常被设成 error/warn，导出的日志里一条插件记录都没有
+        // （songloft-org/songloft-plugin-miot#62 的排查就卡在这）。
+        songloft.log.warn(`[VoiceEngine] Parallel fallback: source=${failedSource} found a candidate but failed to play, retrying with source=${race.candidate.source} keyword="${songName}"`);
+      }
+
+      const played = await this.playSongCandidate(race.candidate, pm, searchTerm, songName, accountId, deviceId);
+      if (played) {
+        return played;
+      }
+      failedSource = race.candidate.source;
     }
-    // warn 级：这一行直接回答「为什么播的是外部搜索结果而不是本地歌曲」。
-    songloft.log.warn(`[VoiceEngine] Parallel search selected source=${candidate.source}`);
-    return await this.playSongCandidate(candidate, pm, searchTerm, songName, accountId, deviceId);
+
+    if (failedSource !== null) {
+      songloft.log.warn(`[VoiceEngine] Parallel search exhausted all sources, last failed source=${failedSource} keyword="${songName}"`);
+    }
+    return null;
   }
 
-  private async firstSuccessfulSongCandidate(
+  /**
+   * 把搜索任务包成带 slot 的竞速单元。搜索任务自身抛异常按「无候选」处理（只 warn 不上抛），
+   * 否则一个源挂掉会连带另一个源已经拿到的候选一起丢掉。
+   */
+  private pendingCandidateTasks(
     tasks: Array<Promise<SongSearchCandidate | null>>,
-  ): Promise<SongSearchCandidate | null> {
-    let pending = tasks.map((task, slot) => ({
+  ): PendingCandidateTask[] {
+    return tasks.map((task, slot) => ({
       slot,
       promise: task
         .then(candidate => ({ slot, candidate }))
@@ -1254,24 +1319,36 @@ export class VoiceEngine {
           return { slot, candidate: null as SongSearchCandidate | null };
         }),
     }));
+  }
+
+  /**
+   * 竞速取一个可用候选，并把尚未 settle 的其余任务随结果交回调用方（供播放失败时回落）。
+   *
+   * 不做成 async generator「按 settle 顺序逐个 yield」：URL 体检判死的候选是要**丢弃**而不是
+   * yield 的（一次调用可能吃掉多个 settle），生成器表达这段就得把体检逻辑漏到调用方；
+   * 而且 async generator 依赖 Symbol.asyncIterator，QuickJS 沙盒里不值得为此赌一把。
+   * 传入/返回同一种 PendingCandidateTask[] 则可被反复调用，控制流全留在调用方一个 while 里。
+   */
+  private async firstSuccessfulSongCandidate(
+    tasks: PendingCandidateTask[],
+  ): Promise<SongCandidateRaceResult | null> {
+    let pending = tasks;
 
     while (pending.length > 0) {
       const settled = await Promise.race(pending.map(p => p.promise));
+      const rest = pending.filter(p => p.slot !== settled.slot);
       if (settled.candidate) {
         if (await this.isCandidateUrlHealthy(settled.candidate)) {
-          return settled.candidate;
+          return { candidate: settled.candidate, rest };
         }
         // URL 不健康：有其他候选在跑则继续等，没有则死马当活马医
-        const otherPending = pending.filter(p => p.slot !== settled.slot);
-        if (otherPending.length === 0) {
+        if (rest.length === 0) {
           songloft.log.warn(`[VoiceEngine] Candidate ${settled.candidate.source} URL unhealthy, no fallback available, will try anyway`);
-          return settled.candidate;
+          return { candidate: settled.candidate, rest };
         }
         songloft.log.warn(`[VoiceEngine] Candidate ${settled.candidate.source} URL unhealthy, waiting for other sources`);
-        pending = otherPending;
-        continue;
       }
-      pending = pending.filter(p => p.slot !== settled.slot);
+      pending = rest;
     }
 
     return null;
