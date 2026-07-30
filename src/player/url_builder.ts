@@ -13,6 +13,50 @@ function isLoopbackUrl(url: string): boolean {
   return host === 'localhost' || host.startsWith('127.') || host === '::1';
 }
 
+/** buildSongURL 的选项。baseUrl 见 buildSongURL 的 @param 说明。 */
+export interface PlaybackURLOptions {
+  forceMp3?: boolean;
+  radioForceMp3?: boolean;
+  normalize?: boolean;
+  seekSeconds?: number;
+  baseUrl?: string;
+}
+
+/**
+ * 从插件配置推导播放 URL 选项（同步版，已经有 config 对象时用）。
+ *
+ * 所有把 URL 推给音箱的地方都必须经这里，不要各自手写读 config——独立歌曲直推路径
+ * 当初就是漏了 force_mp3，音箱拿到不能解码的流后亮灯不出声
+ * （songloft-org/songloft-plugin-miot#62）。
+ */
+export function playbackOptionsOf(
+  config: { force_mp3?: boolean; radio_force_mp3?: boolean; volume_normalize?: boolean },
+  extra?: { seekSeconds?: number },
+): PlaybackURLOptions {
+  return {
+    forceMp3: !!config.force_mp3,
+    radioForceMp3: !!config.radio_force_mp3,
+    normalize: !!config.volume_normalize,
+    seekSeconds: extra?.seekSeconds,
+  };
+}
+
+/**
+ * 从 ConfigManager 读取播放 URL 选项（异步版）。
+ * 读配置失败按全 false：宁可播源格式，也不要因为读配置失败而播不出声。
+ */
+export async function playbackOptionsFromConfig(
+  configManager: { getConfig(): Promise<any> },
+  extra?: { seekSeconds?: number },
+): Promise<PlaybackURLOptions> {
+  try {
+    return playbackOptionsOf(await configManager.getConfig(), extra);
+  } catch (e) {
+    songloft.log.warn('[URLBuilder] 读取播放选项失败，按源格式播放: ' + String(e));
+    return { seekSeconds: extra?.seekSeconds };
+  }
+}
+
 /**
  * URL构造器 - 构造歌曲和封面的播放URL
  */
@@ -31,13 +75,17 @@ export class URLBuilder {
    * @param options.seekSeconds 从第 N 秒起播：追加 seek=N，服务端产出以该位置为开头的 MP3 流。
    *   音箱只会从头拉 URL，续播位置只能这样表达（songloft-org/songloft-plugin-miot#60）。
    *   电台（直播）无位置概念，自动忽略。
+   * @param options.baseUrl 覆盖服务器地址。默认用 getHostBaseUrl()（用户配的 server_host，
+   *   那是给**音箱**访问用的局域网/公网地址）。插件自己要发请求时必须传本机 API 地址
+   *   （getHostAPIBaseUrl()），否则外网部署下会变成一次 hairpin NAT 出网回环
+   *   （songloft-org/songloft-plugin-miot#62 的 URL 体检就是这么失败的）。
    * @returns 播放 URL（相对路径会自动附加 access_token）
    */
   static async buildSongURL(song: {
     id?: number;
     url?: string;
     type?: string;
-  }, options?: { forceMp3?: boolean; radioForceMp3?: boolean; normalize?: boolean; seekSeconds?: number }): Promise<string> {
+  }, options?: PlaybackURLOptions): Promise<string> {
     const songUrl = song.url || '';
 
     if (!songUrl) {
@@ -54,7 +102,7 @@ export class URLBuilder {
     // 导致后续参数被合并进 access_token 的值；服务端认证中间件（internal/middleware/auth.go）
     // 依赖「JWT 不含空格」按空格把 token 剥离、再逐个 k=v 还原后续参数。若把 access_token 挪到
     // 后面，这个还原前提就会被破坏。故 format / radio_transcode 等一律追加在 access_token 之后。
-    const serverHost = getHostBaseUrl();
+    const serverHost = options?.baseUrl ?? getHostBaseUrl();
     const accessToken = await songloft.plugin.getToken();
     const separator = songUrl.includes('?') ? '&' : '?';
     let url = serverHost + songUrl + separator + 'access_token=' + accessToken;
@@ -79,7 +127,8 @@ export class URLBuilder {
       url += '&seek=' + seek;
     }
 
-    if (isLoopbackUrl(url)) {
+    // 回环告警只对「给音箱用的地址」有意义；显式覆盖成本机地址时（插件自己发请求）回环是正常的。
+    if (!options?.baseUrl && isLoopbackUrl(url)) {
       songloft.log.warn('[URLBuilder] 播放 URL 包含回环地址，MIoT 音箱无法访问。请在插件配置中设置正确的局域网地址（如 http://192.168.x.x:58091）');
     }
 

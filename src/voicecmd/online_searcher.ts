@@ -5,7 +5,7 @@
 
 import { MinaService } from '../service/service';
 import { getHostAPIBaseUrl } from '../utils/http';
-import { URLBuilder } from '../player/url_builder';
+import { URLBuilder, playbackOptionsOf } from '../player/url_builder';
 import { ConfigManager } from '../config/manager';
 import { IndexingManager } from '../indexing/manager';
 import { GroupCoordinator } from '../group/coordinator';
@@ -323,8 +323,10 @@ export class OnlineSearcher {
       songloft.log.warn(`[OnlineSearcher] Playlist takeover failed for playlist ${appendedPlaylistId}, falling back to single URL push`);
     }
 
-    // 用返回的 url 构造完整播放 URL（相对路径，URLBuilder 会拼接 server_host 和 token）
-    const playUrl = await URLBuilder.buildSongURL({ id: imported.id, url: imported.url});
+    // 用返回的 url 构造完整播放 URL（相对路径，URLBuilder 会拼接 server_host 和 token）。
+    // 必须带上 force_mp3 / volume_normalize：直推路径漏了这些选项时，音箱会拿到不能解码的
+    // 源格式流而亮灯不出声（songloft-org/songloft-plugin-miot#62）。
+    const playUrl = await URLBuilder.buildSongURL({ id: imported.id, url: imported.url }, playbackOptionsOf(config));
     if (!playUrl) {
       songloft.log.error('[OnlineSearcher] Failed to build URL for song id=' + imported.id);
       return false;

@@ -14,7 +14,7 @@ import { URLBuilder } from '../player/url_builder';
 import { AIAnalyzer } from './ai_analyzer';
 import { OnlineSearcher } from './online_searcher';
 import { updateDeviceStatusCache } from '../handlers/playlist';
-import { callHostAPI } from '../utils/http';
+import { callHostAPI, getHostAPIBaseUrl } from '../utils/http';
 import { MemoryService } from '../memory';
 import type { PlaylistManager } from '../player/manager';
 import type { SongLocation, ArtistSongLocation } from '../indexing/manager';
@@ -33,11 +33,19 @@ interface MatchResult {
   argument: string;
 }
 
+/**
+ * 独立歌曲候选：不在任何歌单里的歌，由 findStandaloneSongByName 经 songs.getById 拿到完整字段。
+ * type 决定电台转码是否生效、duration 决定能否注册自动切歌定时器，两者都不能丢
+ * （songloft-org/songloft-plugin-miot#62）。
+ */
 interface StandaloneSongCandidate {
   id: number;
   url: string;
   title: string;
   artist: string;
+  album?: string;
+  type?: string;
+  duration?: number;
 }
 
 interface PlayedSong {
@@ -405,14 +413,17 @@ export class VoiceEngine {
           songloft.log.warn(`[VoiceMemory] error fallback: songId not playable id=${record.songId}`);
           return null;
         }
-        await this.prepareMemoryPlayback(accountId, deviceId);
+        const pm = await this.prepareMemoryPlayback(accountId, deviceId);
+        // 展开完整 song 后再覆盖标题/歌手：type / duration 要留着，否则电台转码判定与
+        // 自动切歌定时器都会失效（songloft-org/songloft-plugin-miot#62）。
         const standalone = {
+          ...(song as any),
           id: song.id,
           url: song.url,
           title: song.title || songName,
           artist: song.artist || record.artist || '',
         };
-        const played = await this.playStandaloneSong(standalone, accountId, deviceId);
+        const played = await this.playStandaloneSong(standalone, pm);
         return played ? {
           songId: standalone.id,
           songName: standalone.title,
@@ -1010,7 +1021,10 @@ export class VoiceEngine {
     const config = await this.configManager.getConfig();
     const hint = this.buildExternalSearchHint(songName, artist);
     const priority = this.normalizeSearchPriority(config.search_priority);
-    songloft.log.info(`[VoiceEngine] Play song priority=${priority} keyword="${songName}" localTerm="${searchTerm}"`);
+    // warn 级：这是搜歌链路的入口锚点。插件日志默认都是 info，而宿主 log level 常被设为
+    // error/warn，导出的日志里一条插件记录都没有，问题完全不可定位
+    // （songloft-org/songloft-plugin-miot#62 的排查就卡在这）。
+    songloft.log.warn(`[VoiceEngine] Play song priority=${priority} keyword="${songName}" localTerm="${searchTerm}"`);
 
     // 搜索提示 TTS 与搜歌并行执行
     const ttsHintEnabled = config.interrupt_tts_hint_enabled;
@@ -1089,9 +1103,13 @@ export class VoiceEngine {
       return null;
     }
 
+    // findSongsByArtist 只遍历歌单歌曲缓存，缓存未就绪时必然返回空、被误报成
+    // 「未找到该歌手的歌曲」（songloft-org/songloft-plugin-miot#62 的同源表现）。
+    await this.indexingManager.waitForPlaylistCache();
+
     const artistLocs = this.indexingManager.findSongsByArtist(cleanArtist);
     if (artistLocs.length === 0) {
-      songloft.log.warn(`[VoiceEngine] No songs found for artist: ${cleanArtist}`);
+      songloft.log.warn(`[VoiceEngine] No songs found for artist: ${cleanArtist} (playlistCacheReady=${this.indexingManager.isPlaylistCacheReady()})`);
       await this.minaService.textToSpeech(accountId, deviceId, `未找到歌手${cleanArtist}的歌曲`);
       return null;
     }
@@ -1219,7 +1237,8 @@ export class VoiceEngine {
     if (!candidate) {
       return null;
     }
-    songloft.log.info(`[VoiceEngine] Parallel search selected source=${candidate.source}`);
+    // warn 级：这一行直接回答「为什么播的是外部搜索结果而不是本地歌曲」。
+    songloft.log.warn(`[VoiceEngine] Parallel search selected source=${candidate.source}`);
     return await this.playSongCandidate(candidate, pm, searchTerm, songName, accountId, deviceId);
   }
 
@@ -1262,30 +1281,59 @@ export class VoiceEngine {
    * 检查候选歌曲的 URL 是否有效。
    * - 本地索引歌曲（local_index）不检查，URL 由插件内部管理。
    * - 独立远程歌曲（remote_song）通过 range 请求验证，防止过期链接推送给音箱。
+   *
+   * 两个曾经把本地歌曲全部误判为「不健康」的坑（songloft-org/songloft-plugin-miot#62）：
+   * 1. 不要用 AbortController：QuickJS 沙盒里没有这个全局（宿主 polyfill 只提供 fetch /
+   *    setTimeout / URL 等，见 internal/jsruntime/polyfill.go）。`new AbortController()` 会抛
+   *    ReferenceError，被本函数的 catch 吞掉后**恒定返回 false**，于是并行搜歌里每个本地候选
+   *    都被判死，不做体检的外部搜索结果无条件胜出。改用 X-Fetch-Timeout-Ms 头 + Promise.race，
+   *    与 online_searcher.ts 的带超时 fetch 同一套写法。
+   * 2. 探针必须走本机 API 地址（getHostAPIBaseUrl），不能用给音箱的 server_host——外网部署下
+   *    后者是一次 hairpin NAT 出网回环，容易失败或超过 3s。
    */
   private async isCandidateUrlHealthy(candidate: SongSearchCandidate): Promise<boolean> {
     if (candidate.source !== 'remote_song') return true;
 
-    const playUrl = await URLBuilder.buildSongURL(candidate.song);
-    if (!playUrl) return false;
+    const rawUrl = candidate.song.url || '';
+    if (!rawUrl) return false;
 
+    // 外部直链 vs 指向自家服务端的相对路径（/api/v1/songs/{id}/play）。
+    const isExternalDirect = rawUrl.startsWith('http://') || rawUrl.startsWith('https://');
+
+    let probeUrl = rawUrl;
+    if (!isExternalDirect) {
+      try {
+        probeUrl = await URLBuilder.buildSongURL(candidate.song, { baseUrl: await getHostAPIBaseUrl() });
+      } catch (e) {
+        // 体检设施本身不可用，不该据此判死一首本地库里的歌。
+        songloft.log.warn(`[VoiceEngine] URL 体检跳过（拿不到本机 API 地址）: ${String(e)}`);
+        return true;
+      }
+    }
+    if (!probeUrl) return false;
+
+    // 探针刻意不带 format=mp3 / normalize=1：那会让服务端为一次探针启动 ffmpeg 冷启动，
+    // 几乎必然超过下面这个 3s 预算。
+    const started = Date.now();
     try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), URL_HEALTH_CHECK_TIMEOUT_MS);
-      const resp = await fetch(playUrl, {
-        method: 'GET',
-        headers: { Range: 'bytes=0-0' },
-        signal: controller.signal,
-      });
-      clearTimeout(timer);
+      const resp = await Promise.race([
+        fetch(probeUrl, {
+          method: 'GET',
+          headers: { Range: 'bytes=0-0', 'X-Fetch-Timeout-Ms': String(URL_HEALTH_CHECK_TIMEOUT_MS) },
+        }),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('probe timeout')), URL_HEALTH_CHECK_TIMEOUT_MS)),
+      ]);
       const ok = resp.ok || resp.status === 206;
       if (!ok) {
-        songloft.log.warn(`[VoiceEngine] URL health check failed status=${resp.status}: ${playUrl.slice(0, 80)}`);
+        songloft.log.warn(`[VoiceEngine] URL 体检不通过 status=${resp.status} external=${isExternalDirect} (${Date.now() - started}ms): ${probeUrl.slice(0, 80)}`);
       }
       return ok;
     } catch (e) {
-      songloft.log.warn(`[VoiceEngine] URL health check error: ${String(e)}`);
-      return false;
+      // 超时/网络错：外部直链判死（本检查的原意就是防过期直链）；自家服务端放行——
+      // 大概率只是本机忙或正在转码，仍比一个随机外部搜索结果靠谱。
+      songloft.log.warn(`[VoiceEngine] URL 体检异常 external=${isExternalDirect} (${Date.now() - started}ms): ${String(e)} → ${isExternalDirect ? '判为不健康' : '放行'}`);
+      return !isExternalDirect;
     }
   }
 
@@ -1343,7 +1391,7 @@ export class VoiceEngine {
         return playedLoc ? this.playedSongFromLocation(playedLoc) : null;
       }
       case 'remote_song': {
-        const played = await this.playStandaloneSong(candidate.song, accountId, deviceId);
+        const played = await this.playStandaloneSong(candidate.song, pm);
         return played ? {
           songId: candidate.song.id,
           songName: candidate.song.title,
@@ -1376,33 +1424,30 @@ export class VoiceEngine {
     };
   }
 
+  /**
+   * 播放一首独立歌曲（不在任何歌单里）。
+   *
+   * 交给 PlaylistManager 当「单曲临时列表」播，而不是手写 playURL——playCurrent 已经把
+   * 「读 config 拿 force_mp3/normalize → 构 URL → 分组扇出 → 注册切歌定时器 → 预热 → 更新
+   * 播放状态」全做了。旧实现手写直推，漏掉 force_mp3 后音箱拿到不能解码的流就亮灯不出声
+   * （songloft-org/songloft-plugin-miot#62），也不注册定时器、网页端看不到在播什么。
+   */
   private async playStandaloneSong(
     standalone: StandaloneSongCandidate,
-    accountId: string,
-    deviceId: string,
+    pm: PlaylistManager,
   ): Promise<boolean> {
-    const playUrl = await URLBuilder.buildSongURL(standalone);
-    if (!playUrl) {
-      songloft.log.error('[VoiceEngine] Failed to build standalone remote song URL: ' + standalone.title);
+    // 固定 order 模式：单曲列表下 getNextIndex() 返回 -1，播完即停，与原直推行为一致。
+    // 若沿用设备的 single/loop 模式会变成无限循环。
+    // artistQuery 必须显式传 ''：playWithSongs 对 undefined 会保留上一次的临时歌手查询词，
+    // 持久化后会被 restoreTempPlaylists 误当成「歌手歌单」恢复。
+    // 分组扇出由 playCurrent 对 targets 统一处理，这里不再自己调 fanOutPlayURL，否则重复下发。
+    const ok = await pm.playWithSongs([standalone as any], 0, 'order', `单曲: ${standalone.title}`, '');
+    if (!ok) {
+      songloft.log.error('[VoiceEngine] Failed to play standalone song: ' + standalone.title + ' - ' + standalone.artist);
       return false;
     }
 
-    const played = await this.minaService.playURL(accountId, deviceId, playUrl, {
-      title: standalone.title,
-      artist: standalone.artist,
-    });
-    if (!played) {
-      songloft.log.error('[VoiceEngine] Failed to play standalone remote song: ' + standalone.title + ' - ' + standalone.artist);
-      return false;
-    }
-
-    // 分组同步：让组内其他成员播放同一 URL
-    await this.groupCoordinator?.fanOutPlayURL(accountId, deviceId, playUrl, {
-      title: standalone.title,
-      artist: standalone.artist,
-    });
-
-    songloft.log.info('[VoiceEngine] Played standalone remote song: ' + standalone.title + ' - ' + standalone.artist);
+    songloft.log.warn(`[VoiceEngine] 走独立歌曲路径播放（不在任何歌单，无自动续播）: "${standalone.title}" - ${standalone.artist} id=${standalone.id} type=${standalone.type}`);
     return true;
   }
 

@@ -68,6 +68,10 @@ export interface IndexStatus {
   playlist_count: number;
   last_refresh_time: string;
   is_refreshing: boolean;
+  /** 歌单歌曲缓存（歌曲→所在歌单位置）是否已完整跑过一轮 */
+  playlist_cache_ready: boolean;
+  /** 已加载进缓存的歌单数（诊断用：与 playlist_count 对比可看加载进度） */
+  playlist_cache_loaded: number;
 }
 
 type RefreshResult = { success: boolean; songCount: number; playlistCount: number };
@@ -253,6 +257,13 @@ const LIGHT_INDEX_BATCH_SIZE = 300;
 /** 歌单歌曲预拉并发数，避免一次性 Promise.all 压垮低配机器。 */
 const PLAYLIST_FETCH_CONCURRENCY = 3;
 
+/**
+ * 搜歌热路径等待「歌单歌曲缓存首次加载完成」的预算。
+ * 只在插件启动后第一次搜歌前生效（闩锁一旦翻转就永久为 true），所以这笔延迟是一次性的。
+ * 不要设得比 INDEX_READY_WAIT_MS 大——语音口令的总响应预算有限。
+ */
+const PLAYLIST_CACHE_WAIT_MS = 3000;
+
 /** 独立歌曲 miss 后的全量刷新冷却，避免每条未命中口令都重建索引。 */
 const STANDALONE_REFRESH_COOLDOWN_MS = 60_000;
 
@@ -420,9 +431,24 @@ export class IndexingManager {
   private lastRefreshTime: number = 0;
   private isRefreshing: boolean = false;
   private indexReady: boolean = false;
-  private refreshGeneration: number = 0;
   private lastStandaloneRefreshTime: number = 0;
   private pendingRefreshPromise: Promise<RefreshResult> | null = null;
+
+  // ===== 歌单歌曲缓存的加载状态机 =====
+  // 加载轮次刻意与 refresh 解耦：旧实现把缓存加载挂在 refresh 代际（refreshGeneration）上，
+  // 任何一次新 refresh 都会把在飞的加载整轮丢弃重来，而 findStandaloneSongByName 每次 miss
+  // 都会 refresh 一次 → 大曲库/低配机上缓存永远加载不完
+  // （songloft-org/songloft-plugin-miot#62 的活锁）。
+  /** 当前生效的加载轮次；旧轮次发现 token 变了就自行退出。 */
+  private playlistCacheToken: number = 0;
+  private playlistCacheLoading: boolean = false;
+  /** 「至少完整跑过一轮」的闩锁，一旦 true 不再回落（否则搜歌会反复白等）。 */
+  private playlistCacheReady: boolean = false;
+  private playlistCacheLoadedIds: Set<number> = new Set();
+  /** 启动本轮加载时的歌单 id 集合指纹，用于判定「在飞的加载还算不算数」。 */
+  private playlistCacheSignature: string = '';
+  /** 加载期间又来了 refresh：跑完后补一轮，把期间的变更捡回来。 */
+  private playlistCacheRevalidate: boolean = false;
 
   constructor(configManager?: import('../config/manager').ConfigManager) {
     this.configManager = configManager ?? null;
@@ -488,51 +514,105 @@ export class IndexingManager {
     return out;
   }
 
-  private async fetchPlaylistSongsCache(playlists: IndexedPlaylist[]): Promise<Map<number, CachedPlaylistSong[]>> {
-    const cache = new Map<number, CachedPlaylistSong[]>();
+  /**
+   * 逐歌单加载并**增量提交**进正在使用的缓存。
+   *
+   * 刻意不用「影子 Map 加载完再整体替换」：那样中途被取代就一个歌单也留不下，
+   * 而搜歌恰好需要「有多少用多少」。增量提交后即使这一轮被打断，已提交的歌单继续可命中。
+   */
+  private async runPlaylistCacheLoad(token: number, playlists: IndexedPlaylist[]): Promise<void> {
+    const start = Date.now();
+    let loaded = 0;
+    let failed = 0;
     let next = 0;
     const workerCount = Math.min(PLAYLIST_FETCH_CONCURRENCY, Math.max(1, playlists.length));
 
     const worker = async (): Promise<void> => {
       while (true) {
+        if (token !== this.playlistCacheToken) return;  // 歌单集合已变，本轮作废
         const idx = next++;
         if (idx >= playlists.length) return;
 
         const pl = playlists[idx];
         try {
           const plSongs = (await songloft.playlists.getSongs(pl.id, { limit: 100000 })) ?? [];
-          cache.set(pl.id, await this.buildCachedPlaylistSongs(plSongs));
+          if (token !== this.playlistCacheToken) return;
+          this.playlistSongsCache.set(pl.id, await this.buildCachedPlaylistSongs(plSongs));
+          this.playlistCacheLoadedIds.add(pl.id);
+          loaded++;
         } catch (e) {
-          songloft.log.warn(`索引刷新: 获取歌单歌曲失败 playlist_id=${pl.id}: ${e instanceof Error ? e.message : String(e)}`);
+          failed++;
+          songloft.log.warn(`歌单歌曲缓存: 获取歌单歌曲失败 playlist_id=${pl.id}: ${e instanceof Error ? e.message : String(e)}`);
         }
         await yieldToRuntime();
       }
     };
 
-    await Promise.all(Array.from({ length: workerCount }, () => worker()));
-    return cache;
-  }
+    try {
+      await Promise.all(Array.from({ length: workerCount }, () => worker()));
+    } finally {
+      // 收尾只有仍是当前轮次才做。被取代的旧轮次绝不能把 playlistCacheLoading 置回 false——
+      // 新轮次正在跑，擦掉标志会让 waitForPlaylistCache 的兜底重复启动加载。
+      if (token === this.playlistCacheToken) {
+        // 增量提交不再整体替换 Map，已删除的歌单需要显式收敛。
+        const alive = new Set(playlists.map(p => p.id));
+        for (const id of Array.from(this.playlistSongsCache.keys())) {
+          if (!alive.has(id)) {
+            this.playlistSongsCache.delete(id);
+            this.playlistCacheLoadedIds.delete(id);
+          }
+        }
 
-  private startBackgroundPlaylistCache(
-    generation: number,
-    playlists: IndexedPlaylist[],
-  ): void {
-    this.replacePlaylistSongsCacheInBackground(generation, playlists).catch(e => {
-      songloft.log.warn(`歌单歌曲缓存后台加载失败: ${e instanceof Error ? e.message : String(e)}`);
-    });
-  }
+        // 只有「跑完了一遍当前已知的歌单集合」才算就绪。空集合 + 索引还没建起来
+        // （playlists 尚未从宿主拉到）不能 latch：否则闩锁提前翻转，之后 refresh 带来
+        // 真正的歌单时搜歌不再等待，又会退化成独立歌曲直推。
+        // 空曲库（refresh 完确实零歌单）仍要 latch，否则每次搜歌白等满预算。
+        const coveredKnownSet = playlists.length > 0 || this.indexReady;
+        const firstReady = coveredKnownSet && !this.playlistCacheReady;
+        if (coveredKnownSet) {
+          this.playlistCacheReady = true;
+        }
+        this.playlistCacheLoading = false;
 
-  private async replacePlaylistSongsCacheInBackground(
-    generation: number,
-    playlists: IndexedPlaylist[],
-  ): Promise<void> {
-    const start = Date.now();
-    const cache = await this.fetchPlaylistSongsCache(playlists);
-    if (generation !== this.refreshGeneration) {
-      return;
+        const line = `歌单歌曲缓存加载完成: playlists=${this.playlistSongsCache.size} loaded=${loaded} failed=${failed} pinyinCache=${pinyinCache.size} (${Date.now() - start}ms)`;
+        // 首次就绪是个关键里程碑（本地搜歌从此刻起才能定位歌单位置），提到 warn 让
+        // log level=warn 的用户也能看到；后续 revalidate 保持 info 不刷屏。
+        if (firstReady) songloft.log.warn(line + ' [首次就绪]');
+        else songloft.log.info(line);
+
+        if (this.playlistCacheRevalidate) {
+          this.playlistCacheRevalidate = false;
+          this.schedulePlaylistCacheLoad(this.playlists);
+        }
+      }
     }
-    this.playlistSongsCache = cache;
-    songloft.log.info(`歌单歌曲缓存后台加载完成: playlists=${cache.size} pinyinCache=${pinyinCache.size} (${Date.now() - start}ms)`);
+  }
+
+  /**
+   * 调度一轮歌单歌曲缓存加载。
+   * 歌单集合未变且已有加载在飞 → 只标记「跑完补一轮」，**不重启**。
+   */
+  private schedulePlaylistCacheLoad(playlists: IndexedPlaylist[]): void {
+    const signature = playlists.map(p => p.id).sort((a, b) => a - b).join(',');
+
+    if (this.playlistCacheLoading) {
+      if (signature === this.playlistCacheSignature) {
+        this.playlistCacheRevalidate = true;
+        songloft.log.info('歌单歌曲缓存: 已有加载在进行且歌单集合未变，跑完后补一轮');
+        return;
+      }
+      songloft.log.info('歌单歌曲缓存: 歌单集合已变，作废在飞加载并重启（已提交条目原地保留）');
+    }
+
+    this.playlistCacheSignature = signature;
+    this.playlistCacheLoading = true;
+    const token = ++this.playlistCacheToken;
+    this.runPlaylistCacheLoad(token, playlists).catch(e => {
+      songloft.log.warn(`歌单歌曲缓存后台加载异常: ${e instanceof Error ? e.message : String(e)}`);
+      if (token === this.playlistCacheToken) {
+        this.playlistCacheLoading = false;
+      }
+    });
   }
 
   /**
@@ -558,8 +638,6 @@ export class IndexingManager {
   private async doRefresh(): Promise<RefreshResult> {
     this.isRefreshing = true;
     try {
-      const generation = this.refreshGeneration + 1;
-
       // 1. 获取歌单列表（桥接直接返回数组）
       const rawPlaylists = (await songloft.playlists.list()) ?? [];
 
@@ -583,13 +661,12 @@ export class IndexingManager {
       const newSongs = await this.buildSongIndex(rawSongs);
 
       // 4. 歌曲列表到达后立即 ready；歌单歌曲缓存改为后台加载，避免低配设备长时间阻塞。
-      this.refreshGeneration = generation;
       this.playlists = newPlaylists;
       this.songs = newSongs;
       this.lastRefreshTime = Date.now();
       this.indexReady = true;
 
-      this.startBackgroundPlaylistCache(generation, newPlaylists);
+      this.schedulePlaylistCacheLoad(newPlaylists);
 
       songloft.log.info(`轻量索引构建完成: playlists=${newPlaylists.length} songs=${newSongs.length}, 歌单歌曲缓存后台加载已启动`);
       return { success: true, songCount: newSongs.length, playlistCount: newPlaylists.length };
@@ -624,6 +701,38 @@ export class IndexingManager {
   }
 
   /**
+   * 等歌单歌曲缓存首次加载完成。
+   *
+   * 「歌曲 → 所在歌单第几首」只能靠这份缓存回答。缓存未就绪时 findSongByName 会把
+   * 「查不到位置」误判成「这首歌不在任何歌单」，从而把一首本地歌当独立远程歌曲直推
+   * （songloft-org/songloft-plugin-miot#62）。所以凡是依赖歌单位置的路径都要先等一等。
+   *
+   * 零歌单时一轮加载瞬间完成并 latch ready，不会让空曲库每次搜歌白等满预算。
+   */
+  async waitForPlaylistCache(timeoutMs = PLAYLIST_CACHE_WAIT_MS): Promise<boolean> {
+    if (this.playlistCacheReady) return true;
+    if (!this.playlistCacheLoading) {
+      this.schedulePlaylistCacheLoad(this.playlists);
+    }
+
+    const deadline = Date.now() + Math.max(0, timeoutMs);
+    while (!this.playlistCacheReady && Date.now() < deadline) {
+      const remaining = deadline - Date.now();
+      await sleep(Math.min(50, Math.max(1, remaining)));
+    }
+
+    if (!this.playlistCacheReady) {
+      songloft.log.warn(`[IndexingManager] 歌单歌曲缓存等待超时(${timeoutMs}ms) loaded=${this.playlistCacheLoadedIds.size}/${this.playlists.length}，本轮歌曲定位可能退化为独立歌曲直推`);
+    }
+    return this.playlistCacheReady;
+  }
+
+  /** 歌单歌曲缓存是否已完整跑过一轮 */
+  isPlaylistCacheReady(): boolean {
+    return this.playlistCacheReady;
+  }
+
+  /**
    * 获取索引状态
    */
   getStatus(): IndexStatus {
@@ -635,6 +744,8 @@ export class IndexingManager {
         ? new Date(this.lastRefreshTime).toISOString()
         : '',
       is_refreshing: this.isRefreshing,
+      playlist_cache_ready: this.playlistCacheReady,
+      playlist_cache_loaded: this.playlistCacheLoadedIds.size,
     };
   }
 
@@ -721,8 +832,15 @@ export class IndexingManager {
       return { index: 0, found: false };
     }
 
+    // 同 findSongByName：位置信息只能靠这份缓存，没到位就等一等（#62）。
+    const cacheReady = await this.waitForPlaylistCache();
+
     const songs = this.playlistSongsCache.get(playlistId) ?? [];
     if (songs.length === 0) {
+      // 「歌单真的空」与「缓存还没加载到这个歌单」表现相同，但后者是个 bug 现场，要能区分。
+      if (!cacheReady || !this.playlistCacheLoadedIds.has(playlistId)) {
+        songloft.log.warn(`[IndexingManager] findSongInPlaylist: 歌单 ${playlistId} 的歌曲缓存未就绪，无法定位「${songName}」，将从第 0 首开始`);
+      }
       return { index: 0, found: false };
     }
 
@@ -750,6 +868,10 @@ export class IndexingManager {
    */
   async findSongByName(songName: string): Promise<SongLocation | null> {
     if (!this.indexReady || !songName) return null;
+
+    // 歌单位置只能靠 playlistSongsCache 回答；缓存没到位就等一等，否则会把「查不到位置」
+    // 误判成「不在任何歌单」（#62）。闩锁翻转后这里是零成本。
+    const cacheReady = await this.waitForPlaylistCache();
 
     const startMs = Date.now();
 
@@ -826,9 +948,19 @@ export class IndexingManager {
         bestGlobal.titlePinyin, bestGlobal.artistPinyin, bestGlobal.albumPinyin,
       );
       if (bestGlobalScore >= MIN_MATCH_SCORE) {
-        songloft.log.info(
-          `[IndexingManager] findSongByName done (${elapsedMs}ms) → global match "${bestGlobal.title}" by "${bestGlobal.artist}" (score=${bestGlobalScore.toFixed(1)}) not in any playlist, deferring to standalone`
-        );
+        // 两种情形要分清：缓存没赶上时我们其实**不知道**这首歌在不在歌单里，
+        // 只是拿不出更好的答案；日志必须说明白，否则下次排查又要从零猜（#62）。
+        if (!cacheReady) {
+          songloft.log.warn(
+            `[IndexingManager] findSongByName (${elapsedMs}ms) 全局命中 "${bestGlobal.title}" 但歌单缓存未就绪` +
+            `(loaded=${this.playlistCacheLoadedIds.size}/${this.playlists.length})：无法确认是否在歌单中，退化为独立歌曲直推（无自动续播）`
+          );
+        } else {
+          songloft.log.warn(
+            `[IndexingManager] findSongByName (${elapsedMs}ms) 全局命中 "${bestGlobal.title}" by "${bestGlobal.artist}" ` +
+            `(score=${bestGlobalScore.toFixed(1)}) 不在任何歌单，转独立歌曲路径`
+          );
+        }
         return null;
       }
     }
@@ -874,51 +1006,61 @@ export class IndexingManager {
     return results;
   }
 
-  /**
-   * 查找独立远程歌曲（不在任何歌单中）
-   * 当 findSongByName 找不到时回退调用。
-   * 先刷新索引确保包含最新导入的歌曲，然后搜索 title 匹配，通过 ID 获取完整信息。
-   *
-   * @returns 歌曲的 id/url/title/artist，未找到返回 null
-   */
-  async findStandaloneSongByName(songName: string): Promise<{ id: number; url: string; title: string; artist: string } | null> {
-    if (!songName) return null;
-
-    // 独立远程歌曲可能刚由外部搜索导入，但全量刷新很重；加冷却避免连续 miss 拖垮低配机。
-    const now = Date.now();
-    if (!this.isRefreshing && now - this.lastStandaloneRefreshTime >= STANDALONE_REFRESH_COOLDOWN_MS) {
-      this.lastStandaloneRefreshTime = now;
-      await this.refresh();
-    } else {
-      const remainingMs = Math.max(0, STANDALONE_REFRESH_COOLDOWN_MS - (now - this.lastStandaloneRefreshTime));
-      songloft.log.info(`[IndexingManager] findStandaloneSongByName: skip refresh (refreshing=${this.isRefreshing}, cooldown=${remainingMs}ms)`);
-    }
-
-    // 在刷新后的索引中按 title 模糊匹配
+  /** 内存索引里的最佳匹配（含 MIN_MATCH_SCORE 阈值），未达标返回 null。 */
+  private bestIndexedMatch(songName: string): IndexedSong | null {
     const matched = this.searchSong(songName);
     if (matched.length === 0) return null;
 
+    const best = matched[0];
     const bestScore = scoreSongTokens(
       tokenizeQuery(songName),
-      matched[0].titleLower, matched[0].artistLower, matched[0].albumLower,
-      matched[0].titlePinyin, matched[0].artistPinyin, matched[0].albumPinyin,
+      best.titleLower, best.artistLower, best.albumLower,
+      best.titlePinyin, best.artistPinyin, best.albumPinyin,
     );
     if (bestScore < MIN_MATCH_SCORE) {
-      songloft.log.info(`[IndexingManager] findStandaloneSongByName: best match "${matched[0].title}" by "${matched[0].artist}" score=${bestScore.toFixed(1)} below threshold, skipping`);
+      songloft.log.info(`[IndexingManager] bestIndexedMatch: "${best.title}" by "${best.artist}" score=${bestScore.toFixed(1)} below threshold, skipping`);
       return null;
     }
+    return best;
+  }
 
-    // 通过 ID 获取完整歌曲信息（含 url）
+  /**
+   * 查找独立远程歌曲（不在任何歌单中）
+   * 当 findSongByName 找不到时回退调用。
+   *
+   * **先查内存索引，只有真 miss 才 refresh**：refresh 唯一的价值是「捡回索引还不知道的新歌」，
+   * 对已知歌曲纯属开销，而且每次都会扰动歌单缓存加载。旧实现无条件先 refresh，于是
+   * 「miss → refresh → 作废缓存加载 → 继续 miss」形成自维持回路
+   * （songloft-org/songloft-plugin-miot#62）。
+   *
+   * @returns 完整 Song（type/duration 供下游决定电台转码与自动切歌定时器），未找到返回 null
+   */
+  async findStandaloneSongByName(songName: string): Promise<any | null> {
+    if (!songName) return null;
+
+    let best = this.bestIndexedMatch(songName);
+
+    // 内存索引确实没有这首歌，才值得为「刚被外部搜索导入、索引还没见过」重建（仍带冷却）。
+    if (!best) {
+      const now = Date.now();
+      if (!this.isRefreshing && now - this.lastStandaloneRefreshTime >= STANDALONE_REFRESH_COOLDOWN_MS) {
+        this.lastStandaloneRefreshTime = now;
+        songloft.log.warn(`[IndexingManager] findStandaloneSongByName: 内存索引未命中「${songName}」，触发全量刷新`);
+        await this.refresh();
+        best = this.bestIndexedMatch(songName);
+      } else {
+        const remainingMs = Math.max(0, STANDALONE_REFRESH_COOLDOWN_MS - (now - this.lastStandaloneRefreshTime));
+        songloft.log.info(`[IndexingManager] findStandaloneSongByName: skip refresh (refreshing=${this.isRefreshing}, cooldown=${remainingMs}ms)`);
+      }
+    }
+    if (!best) return null;
+
+    // 通过 ID 获取完整歌曲信息（含 url / type / duration）
     try {
-      const fullSong = await songloft.songs.getById(matched[0].id);
+      const fullSong = await songloft.songs.getById(best.id);
       if (fullSong && fullSong.url) {
-        songloft.log.info('[IndexingManager] Found standalone remote song: ' + matched[0].title + ' - ' + matched[0].artist + ', id=' + matched[0].id);
-        return {
-          id: fullSong.id,
-          url: fullSong.url,
-          title: fullSong.title,
-          artist: fullSong.artist,
-        };
+        songloft.log.warn(`[IndexingManager] 独立歌曲路径命中: "${fullSong.title}" - ${fullSong.artist} id=${fullSong.id} type=${(fullSong as any).type} duration=${(fullSong as any).duration}`);
+        return fullSong;
       }
     } catch (e) {
       songloft.log.warn('[IndexingManager] Failed to get standalone song by id: ' + String(e));

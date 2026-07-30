@@ -35,6 +35,15 @@ function updateIndexStatus(status) {
     if (!textEl || !status) return;
 
     if (status.ready) {
+        // 歌单歌曲缓存（歌曲→所在歌单位置）是后台加载的，它没就绪时语音搜歌只能退化为
+        // 「独立歌曲直推」——播完即停、没有歌单上下文。把进度显示出来，避免用户把这段
+        // 加载窗口误当成「搜不到本地歌」的 bug（songloft-org/songloft-plugin-miot#62）。
+        if (status.playlist_cache_ready === false) {
+            textEl.textContent = `索引就绪（${status.playlist_count} 个歌单，${status.song_count} 首歌曲）·`
+                + ` 歌单位置缓存加载中 ${status.playlist_cache_loaded || 0}/${status.playlist_count}`;
+            textEl.style.color = 'var(--md-warning, #ff9800)';
+            return;
+        }
         textEl.textContent = `索引就绪（${status.playlist_count} 个歌单，${status.song_count} 首歌曲）`;
         textEl.style.color = 'var(--md-success, #4caf50)';
     } else {

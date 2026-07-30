@@ -127,8 +127,13 @@ async function onInit(): Promise<void> {
   });
   // 异步刷新索引，不阻塞插件初始化
   setTimeout(() => {
-    indexingManager.refresh().then(() => {
-      playlistManagerMap.restoreTempPlaylists(indexingManager).catch(e => {
+    indexingManager.refresh().then(async () => {
+      // 必须等歌单歌曲缓存加载完再恢复：临时歌手歌单靠 findSongsByArtist 重建，
+      // 而 refresh() resolve 时缓存还在后台加载，结果必然为空——旧代码因此永远恢复不了，
+      // 还会把 pendingTempArtist 清空（songloft-org/songloft-plugin-miot#62）。
+      // 不在语音热路径上，等待预算给大。
+      await indexingManager.waitForPlaylistCache(30_000);
+      await playlistManagerMap.restoreTempPlaylists(indexingManager).catch(e => {
         songloft.log.warn('restoreTempPlaylists failed: ' + String(e));
       });
     }).catch(e => {

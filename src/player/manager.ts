@@ -6,7 +6,7 @@
 
 import { ConfigManager } from '../config/manager';
 import { MinaService } from '../service/service';
-import { URLBuilder } from './url_builder';
+import { URLBuilder, playbackOptionsOf, playbackOptionsFromConfig } from './url_builder';
 import { getHostBaseUrl, callHostAPI } from '../utils/http';
 import type { PlayState, PlayMode, PlayerStatus, DeviceTargetRef, DeviceGroup } from '../types';
 
@@ -840,14 +840,12 @@ export class PlaylistManager {
       return false;
     }
 
-    // 读取是否强制 MP3 / 电台转码 / 音量均衡
+    // 读取是否强制 MP3 / 电台转码 / 音量均衡。config 下面还要给 song_transition_offset 用，
+    // 一次 getConfig 两处消费。
     const config = await this.configManager.getConfig();
-    const forceMp3 = !!config.force_mp3;
-    const radioForceMp3 = !!config.radio_force_mp3;
-    const normalize = !!config.volume_normalize;
 
     // 构造播放URL
-    const songURL = await URLBuilder.buildSongURL(song, { forceMp3, radioForceMp3, normalize, seekSeconds });
+    const songURL = await URLBuilder.buildSongURL(song, playbackOptionsOf(config, { seekSeconds }));
     if (!songURL) {
       songloft.log.error('[PlaylistManager] Failed to build song URL: ' + song.title);
       return false;
@@ -913,15 +911,10 @@ export class PlaylistManager {
     const isLocal = nextSong.type === 'local';
 
     void (async () => {
-      let forceMp3 = false;
-      let volumeNormalize = false;
-      try {
-        const config = await this.configManager.getConfig();
-        forceMp3 = !!config.force_mp3;
-        volumeNormalize = !!config.volume_normalize;
-      } catch {
-        // 读配置失败按不强制处理，仍预热源格式
-      }
+      // 与 playCurrent 共用同一个选项来源，保证预热的转码产物和真实播放 URL 命中同一缓存键。
+      const opts = await playbackOptionsFromConfig(this.configManager);
+      const forceMp3 = !!opts.forceMp3;
+      const volumeNormalize = !!opts.normalize;
       // 本地歌曲已在服务端磁盘上：不开启转码选项时播放就是直接 ServeFile，无冷启动，预热无意义。
       // 但已下载的网络歌曲（MOV/MKV 等视频容器）也属于 local 类型，开启统一 MP3 / 音量均衡后
       // 播放要走 ffmpeg 转码（buildSongURL 对 local 同样追加 &format=mp3）；此时必须预热，
