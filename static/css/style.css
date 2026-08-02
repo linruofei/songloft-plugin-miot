@@ -1869,6 +1869,37 @@ html[data-theme="dark"] {
     margin-top: -6px;
 }
 
+/* ── WebF 引擎下的滑块（songloft-org/songloft#341 Step 3）──────────────
+ *
+ * WebF 没实现 input[type=range]：实测那一整行在 WebF 下一个像素都不画 —— 没有滑块、
+ * 没有文本框，同一行的兄弟文字与行背景也一起消失（盒模型是正常的，只是不绘制）。
+ * 所以宿主的 common.js 垫片会把每个 range **隐藏**并在它后面插一个
+ * <songloft-slider>（Flutter 侧的原生滑块），双向同步 .value / .disabled /
+ * input & change 事件。原 input 仍留在 DOM 里，所以本插件 js/ 里那些
+ * `document.getElementById('volumeSlider').value` 一行都不用改。
+ *
+ * 需要在这里补 CSS 的原因：<songloft-slider> 是**新标签**，匹配不到上面那些
+ * `input[type="range"]` 选择器，几何拿不到。垫片只会把原 input 的 inline style
+ * 拷过去（#scheduleVolume 的 width:100% 因此自动生效），带 class / 选择器的几何
+ * 必须插件自己给一份 —— 也就是下面这块。
+ *
+ * 朝向不靠猜：#volumeSlider 上写了 data-sl-orientation="vertical"，垫片转写成
+ * 元素的 orientation 属性。竖向滑块 min 在下、max 在上，与原来用
+ * `transform: rotate(-90deg)` 转出来的方向一致，所以视觉与手感都不变。
+ * 也因此这里**不需要** transform：元素自己就是竖着画的。
+ *
+ * 这两条规则在浏览器 / 系统 WebView 下永不匹配（那儿没有 songloft-slider 元素），
+ * 属纯增量。
+ */
+songloft-slider {
+    color: var(--md-primary);
+}
+
+.volume-panel .volume-slider-wrap songloft-slider {
+    width: 28px;
+    height: 110px;
+}
+
 .volume-panel .mute-btn {
     width: 32px;
     height: 32px;
@@ -1994,6 +2025,9 @@ html[data-theme="dark"] {
     .play-mode-item { padding: 8px 16px; }
     .volume-panel { width: 52px; height: 180px; }
     .volume-panel .volume-slider-wrap input[type="range"] { width: 90px; }
+    /* WebF 垫片替上来的滑块（见上面 songloft-slider 那段）：原规则缩的是
+       rotate 前的 width，竖向元素对应的是 height。 */
+    .volume-panel .volume-slider-wrap songloft-slider { height: 90px; }
     .device-select-panel { width: calc(100vw - 32px); }
     .playlist-select-panel { width: calc(100vw - 32px); }
 }
