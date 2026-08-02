@@ -129,8 +129,16 @@ html[data-theme="dark"] {
     padding-top: 112px;
 }
 
+/* 安全区一律走宿主注入的 --sl-safe-*，不直接写 env(safe-area-inset-*)。
+ * 本插件声明了 renderEngine: "webf"，而 WebF 压根不实现 env()（`css/keywords.dart`
+ * 里那几个 SAFE_AREA_INSET* / ENV 常量是全库无引用的死常量，连解析入口都不存在），
+ * 继续写 env() 的话在刘海屏 / 手势条设备上这块内边距永远算不出来。
+ * common.css 给这四个变量备了默认值：普通浏览器 / 系统 WebView 下它就等于 env()
+ * 本身（行为与改动前完全一致），WebF 下先是 0px、再由宿主用
+ * MediaQuery.viewPadding 的真值注入覆盖。详见插件开发指南的 WebF 章节。
+ * songloft-org/songloft#341 */
 #tab-settings {
-    padding-bottom: calc(24px + env(safe-area-inset-bottom));
+    padding-bottom: calc(24px + var(--sl-safe-bottom));
 }
 
 .page-content.active { display: block; }
@@ -965,7 +973,9 @@ html[data-theme="dark"] {
     border-top: 1px solid var(--md-outline-variant);
     box-shadow: 0 -2px 8px rgba(0,0,0,.08);
     z-index: 98;
-    padding: 6px 16px calc(4px + env(safe-area-inset-bottom, 0px));
+    /* 安全区见 #tab-settings 处的说明。变量本身已带 0px 兜底，
+     * 所以这里不再需要 env() 的第二参数。 */
+    padding: 6px 16px calc(4px + var(--sl-safe-bottom));
 }
 
 .player-bar-info {
@@ -3735,9 +3745,22 @@ html.embed .player-bar-cover {
     background: rgba(255, 255, 255, 0.25) !important;
 }
 
-/* Safe area for mobile */
+/* Safe area for mobile —— 语义是「至少留 24px，安全区更大时按安全区」。
+ *
+ * 原来写的是 `max(24px, env(safe-area-inset-bottom))`，两处都得改：
+ *   ① env() 换成宿主注入的 var()，理由见 #tab-settings 处的说明；
+ *   ② **max() 也必须去掉** —— WebF 没有实现 CSS max() / min()
+ *      （`css/values/calc.dart` 的 tryParse 只认 calc 与 clamp），
+ *      整条声明在 WebF 下是死的，这跟 env() 无关、改成 var() 也救不回来。
+ *
+ * 换成 clamp(24px, <安全区>, 96px)：clamp 的定义就是 max(MIN, min(VAL, MAX))，
+ * 所以对任何 ≤ 96px 的安全区，它与原来的 max(24px, …) **完全等价**
+ * （真机安全区最大也就 iPhone 的 34px 左右，96px 只是个够不到的上限）。
+ * 浏览器侧因此零行为变化；WebF 侧实测可用（clamp 参数里的 var 会被先展开，
+ * 探针第 17 组 D=30 / J=24 两行钉住了这个事实）。
+ * songloft-org/songloft#341 */
 .fp-controls {
-    padding-bottom: max(24px, env(safe-area-inset-bottom));
+    padding-bottom: clamp(24px, var(--sl-safe-bottom), 96px);
 }
 
 /* ============================================ */
