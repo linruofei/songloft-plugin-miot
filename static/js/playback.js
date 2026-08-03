@@ -414,14 +414,25 @@ export function updatePlayerUI(status) {
         if (coverUrl !== currentPlayerBarCoverUrl) {
             currentPlayerBarCoverUrl = coverUrl;
             if (playerBarCoverObjectUrl) {
-                URL.revokeObjectURL(playerBarCoverObjectUrl);
+                releaseImageURL(playerBarCoverObjectUrl);
                 playerBarCoverObjectUrl = null;
             }
             fetchWithAuth(coverUrl, COVER_FETCH_TIMEOUT_MS).then(blob => {
-                if (coverUrl !== currentPlayerBarCoverUrl) return;
-                playerBarCoverObjectUrl = URL.createObjectURL(blob);
+                // 陈旧性判两次：blob→URL 也是异步的（见 blobToImageURL 注释），
+                // 这一跳期间用户完全可能又切了歌。少判一次就会把上一首的封面
+                // 覆盖到当前歌上，且因为下面会把它记进 playerBarCoverObjectUrl，
+                // 错的那张还会一直留着。
+                if (coverUrl !== currentPlayerBarCoverUrl) return null;
+                return blobToImageURL(blob);
+            }).then(objUrl => {
+                if (!objUrl) return;
+                if (coverUrl !== currentPlayerBarCoverUrl) {
+                    releaseImageURL(objUrl);
+                    return;
+                }
+                playerBarCoverObjectUrl = objUrl;
                 const img = document.getElementById('playerBarCover');
-                if (img) img.src = playerBarCoverObjectUrl;
+                if (img) img.src = objUrl;
             }).catch(() => {
                 if (coverUrl !== currentPlayerBarCoverUrl) return;
                 const img = document.getElementById('playerBarCover');
@@ -431,7 +442,7 @@ export function updatePlayerUI(status) {
     } else if (currentPlayerBarCoverUrl) {
         currentPlayerBarCoverUrl = '';
         if (playerBarCoverObjectUrl) {
-            URL.revokeObjectURL(playerBarCoverObjectUrl);
+            releaseImageURL(playerBarCoverObjectUrl);
             playerBarCoverObjectUrl = null;
         }
         const img = document.getElementById('playerBarCover');
@@ -935,6 +946,67 @@ export function fetchWithAuth(url, timeoutMs = DEFAULT_FETCH_TIMEOUT_MS) {
     }).finally(() => {
         if (timeoutId) clearTimeout(timeoutId);
     });
+}
+
+/**
+ * Blob → 可直接喂给 `<img src>` / CSS `url()` 的 URL 字符串。
+ *
+ * 为什么不直接 `URL.createObjectURL`（songloft-org/songloft#341）：
+ * **WebF 渲染引擎里它压根不存在**（`Blob` 本身有，但没有任何入口能产出 `blob:`；
+ * 也不可能纯 JS 垫出来 —— `blob:` 需要引擎的资源加载器配合）。宿主 common.js
+ * 因此提供 `SongloftPlugin.blobToDataURL`，产出 `data:` URL。
+ *
+ * ⚠️ **返回 Promise，而 `createObjectURL` 是同步的** —— 这个形状差异无法弥合
+ * （blob → base64 只能经 `arrayBuffer()`，本身就是异步的），所以调用点必须异步化，
+ * 不能包一个假的同步替身。
+ *
+ * ⚠️ **WebF 0.24.27 上这条路目前拿不到图，原因在宿主/引擎侧不在这里**：验证容器实测
+ * `btoa` **不是二进制安全的** —— `btoa('\x89')` 得到 `"wg=="`（正确答案是 `"iQ=="`），
+ * 凡字节 > 0x7F 都会先被当字符做一次 UTF-8 编码。到 `btoa` 之前一切正常
+ * （`blob.arrayBuffer()` 的前 8 字节与 PNG 签名逐字节相等），`atob` 也是对的，
+ * 坏的只有 `btoa`，而宿主的 `blobToDataURL` 正是用它编码的。
+ * 另外 WebF 的 `Response.headers.get()` 返回 null、`blob.type` 是空串，
+ * 所以不传 mime 时产出的是 `data:application/octet-stream;…`。
+ * 这两条都得在宿主 `common.js` 里修（换成纯 JS 的 base64 编码表）。
+ * **这里刻意不绕**：绕一遍就是把宿主的责任复制到每个插件里；而且改动前
+ * WebF 下压根没有 `createObjectURL`，封面同样出不来，所以本函数只赚不亏。
+ *
+ * **三条渲染路径（普通浏览器 / 系统 WebView / WebF）共用这一份实现**：
+ * `blobToDataURL` 是 common.js 无条件导出的（不在 `isWebFEngine()` 分支里），
+ * 所以优先走它 —— 于是开发机上的浏览器跑的就是 WebF 那条路径，不会出现
+ * 「WebF 分支永远没人跑因而静默腐化」。刻意**不**按 `html.webf-engine` class 分叉。
+ * `createObjectURL` 只作为宿主 API 缺失时（客户端/服务端 common.js 太旧）的兜底。
+ *
+ * @param {Blob} blob
+ * @returns {Promise<string>} 形如 `data:image/jpeg;base64,...` 或 `blob:...`
+ */
+export function blobToImageURL(blob) {
+    if (!blob) return Promise.reject(new Error('blobToImageURL: no blob'));
+    const toDataURL = window.SongloftPlugin && window.SongloftPlugin.blobToDataURL;
+    if (typeof toDataURL === 'function') return Promise.resolve(toDataURL(blob));
+    if (typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
+        return Promise.resolve(URL.createObjectURL(blob));
+    }
+    return Promise.reject(new Error('blobToImageURL: no blob→url facility'));
+}
+
+/**
+ * 释放 {@link blobToImageURL} 产出的 URL。
+ *
+ * `blob:` URL 必须显式 revoke 否则整个 Blob 常驻内存；`data:` URL 反过来
+ * **没有**可释放的句柄（生命周期就是这个字符串本身，置空引用即可回收），
+ * 对它调 `revokeObjectURL` 是无意义的。所以这里按前缀判别，
+ * 而不是无条件调 `revokeObjectURL` —— 后者虽然多半不报错，
+ * 但会误导读代码的人以为 data: URL 也需要/能够释放。
+ *
+ * @param {string|null} url
+ */
+export function releaseImageURL(url) {
+    if (!url || typeof url !== 'string') return;
+    if (url.slice(0, 5) !== 'blob:') return;
+    try {
+        URL.revokeObjectURL(url);
+    } catch { /* 释放失败无补救手段，也不该影响调用方 */ }
 }
 
 // ========== 歌词相关 ==========

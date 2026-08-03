@@ -5,7 +5,7 @@
 
 import { parseLrc, getCurrentLyricIndex } from './lrc-parser.js';
 import {
-    formatTime, fetchWithAuth, addStatusListener,
+    formatTime, fetchWithAuth, blobToImageURL, releaseImageURL, addStatusListener,
     getCurrentLyrics, getCurrentPosition, getCurrentDuration,
     getIsPlaying, getLastUpdateTime,
     togglePlayPause, previousSong, nextSong, stopPlaylist,
@@ -187,7 +187,7 @@ function loadCover(url) {
 
     if (!url) {
         if (coverObjectUrl) {
-            URL.revokeObjectURL(coverObjectUrl);
+            releaseImageURL(coverObjectUrl);
             coverObjectUrl = null;
         }
         if (coverImg) coverImg.src = '';
@@ -196,11 +196,24 @@ function loadCover(url) {
     }
 
     fetchWithAuth(url, COVER_FETCH_TIMEOUT_MS).then(blob => {
-        if (url !== coverUrl) return;
-        if (coverObjectUrl) URL.revokeObjectURL(coverObjectUrl);
-        coverObjectUrl = URL.createObjectURL(blob);
-        if (coverImg) coverImg.src = coverObjectUrl;
-        if (bgImage) bgImage.style.backgroundImage = `url(${coverObjectUrl})`;
+        // 陈旧性判两次：blob→URL 这一跳也是异步的（见 blobToImageURL 注释），
+        // 期间用户完全可能又切了歌
+        if (url !== coverUrl) return null;
+        return blobToImageURL(blob);
+    }).then(objUrl => {
+        if (!objUrl) return;
+        if (url !== coverUrl) {
+            releaseImageURL(objUrl);
+            return;
+        }
+        if (coverObjectUrl) releaseImageURL(coverObjectUrl);
+        coverObjectUrl = objUrl;
+        if (coverImg) coverImg.src = objUrl;
+        // 大图与模糊背景刻意共用同一个 URL：不要为 bgImage 再转一次
+        // （data: URL 下那是又一份 ~1.33x 体积的 base64 字符串）。
+        // 不加引号 —— base64 字母表与 data: 前缀里的 , ; : / + = 全都是合法的
+        // 无引号 url-token 字符，而验证探针实测通过的正是无引号形态。
+        if (bgImage) bgImage.style.backgroundImage = `url(${objUrl})`;
     }).catch(() => {
         if (url !== coverUrl) return;
         if (coverImg) coverImg.src = '';
