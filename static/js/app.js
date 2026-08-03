@@ -57,6 +57,10 @@ import { initFullscreenPlayer, openFullscreenPlayer, closeFullscreenPlayer } fro
 /** 当前活动页面 */
 let currentPage = 'player';
 
+/** embed 模式下使用内部导航栈，避免 history.back() 干扰宿主路由 */
+const isEmbed = document.documentElement.classList.contains('embed');
+const navStack = ['player'];
+
 /**
  * 导航到子页面
  * @param {string} pageId - 'settings'，兼容旧的 'devices' 账号管理入口
@@ -70,7 +74,11 @@ window.navigateTo = function(pageId) {
         return;
     }
 
-    history.pushState({ page: targetPage, accountManagement: openAccountManagement }, '', '#' + targetPage);
+    if (isEmbed) {
+        navStack.push(targetPage);
+    } else {
+        history.pushState({ page: targetPage, accountManagement: openAccountManagement }, '', '#' + targetPage);
+    }
     showPage(targetPage, { openAccountManagement });
 };
 
@@ -78,6 +86,13 @@ window.navigateTo = function(pageId) {
  * 返回上一页
  */
 window.navigateBack = function() {
+    if (isEmbed) {
+        if (navStack.length > 1) {
+            navStack.pop();
+            showPage(navStack[navStack.length - 1]);
+        }
+        return;
+    }
     history.back();
 };
 
@@ -327,16 +342,17 @@ export function stopPlayerStatusPolling() {
 // ========== 初始化 ==========
 
 document.addEventListener('DOMContentLoaded', () => {
-    // 设置初始历史状态
-    history.replaceState({ page: 'player' }, '', '#player');
+    // 非 embed 模式：使用浏览器 history 管理页面状态
+    if (!isEmbed) {
+        history.replaceState({ page: 'player' }, '', '#player');
 
-    // 监听浏览器返回/前进
-    window.addEventListener('popstate', (event) => {
-        const page = event.state?.page || event.state?.tab || 'player';
-        showPage(page, {
-            openAccountManagement: page === 'devices' || event.state?.accountManagement === true,
+        window.addEventListener('popstate', (event) => {
+            const page = event.state?.page || event.state?.tab || 'player';
+            showPage(page, {
+                openAccountManagement: page === 'devices' || event.state?.accountManagement === true,
+            });
         });
-    });
+    }
 
     // 初始化 Tracely 监控 SDK
     if (window.TRACELY_CONFIG.appId && window.TRACELY_CONFIG.appSecret && window.TRACELY_CONFIG.host) {
