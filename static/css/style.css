@@ -3006,10 +3006,16 @@ songloft-slider {
     flex-direction: column;
     transform: translateY(100%);
     transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    /* WebF 不对 position:fixed 元素应用 transform 位移隐藏，需 visibility 兜底，
+       否则遮罩会一直盖住首页（对齐 .fullscreen-player 的隐藏写法） */
+    visibility: hidden;
+    pointer-events: none;
 }
 
 .schedule-form-overlay.active {
     transform: translateY(0);
+    visibility: visible;
+    pointer-events: auto;
 }
 
 .schedule-form-container {

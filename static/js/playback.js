@@ -865,7 +865,9 @@ function updatePlayModeHighlight() {
     const currentMode = playModeBtn ? (playModeBtn.getAttribute('data-mode') || 'loop') : 'loop';
 
     document.querySelectorAll('.play-mode-item').forEach(item => {
-        item.classList.toggle('active', item.dataset.mode === currentMode);
+        // WebF 下部分元素的 item.dataset 为 null，读 .mode 会抛
+        // "cannot read property 'mode' of null"，改用 getAttribute 跨引擎稳妥
+        item.classList.toggle('active', item.getAttribute('data-mode') === currentMode);
     });
 }
 
