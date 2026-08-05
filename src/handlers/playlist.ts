@@ -302,7 +302,7 @@ export function registerPlaylistHandlers(
       if (isTempPlaylistId(playlistId)) {
         const manager = playlistManagerMap.findByPlaylistId(playlistId);
         if (!manager) {
-          return jsonResponse({ success: true, data: [] });
+          return jsonResponse({ success: true, data: [], expired: true });
         }
         return jsonResponse({ success: true, data: manager.getSongs() });
       }

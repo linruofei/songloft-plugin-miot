@@ -340,6 +340,12 @@ export function loadPlaylistSongs(playlistId, options) {
             return;
         }
 
+        if (data.expired) {
+            songList.innerHTML = '<div class="song-list-empty">该临时歌单已过期</div>';
+            loadPlaylists();
+            return;
+        }
+
         cancelQueuedCovers(songList);
         songList.innerHTML = '';
 
