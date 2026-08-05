@@ -1591,6 +1591,18 @@ export function initConversationUI() {
         });
     }
 
+    // Advanced toggle
+    const advancedToggle = document.getElementById('conversationAdvancedToggle');
+    const advancedPanel = document.getElementById('conversationAdvancedPanel');
+    if (advancedToggle && advancedPanel) {
+        advancedToggle.addEventListener('click', () => {
+            const expanded = advancedToggle.getAttribute('aria-expanded') === 'true';
+            advancedToggle.setAttribute('aria-expanded', String(!expanded));
+            advancedPanel.hidden = expanded;
+            if (!expanded) loadWebhooks();
+        });
+    }
+
     // 添加 Webhook 按钮
     const addBtn = document.getElementById('addWebhookBtn');
     if (addBtn) {
@@ -2275,7 +2287,6 @@ function resetVoiceCommands() {
  */
 export function loadSettingsData() {
     loadConfig();
-    loadWebhooks();
     loadVoiceCommands();
 }
 

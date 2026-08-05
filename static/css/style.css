@@ -2633,6 +2633,56 @@ songloft-slider {
 }
 
 /* Webhook List */
+/* Advanced Toggle (collapsible section) */
+.advanced-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    margin-top: 16px;
+    padding: 10px 0;
+    border: 0;
+    border-top: 1px solid var(--md-outline-variant);
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    text-align: left;
+}
+
+.advanced-toggle-title {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--md-on-surface-variant);
+}
+
+.advanced-toggle .advanced-chevron {
+    font-size: 18px;
+    color: var(--md-on-surface-variant);
+    transition: transform .18s ease;
+}
+
+.advanced-toggle[aria-expanded="true"] .advanced-chevron {
+    transform: rotate(90deg);
+}
+
+.advanced-panel {
+    padding-bottom: 4px;
+}
+
+.section-title-link {
+    display: inline-flex;
+    align-items: center;
+    margin-left: 6px;
+    color: var(--md-primary);
+    text-decoration: none;
+    opacity: 0.7;
+    transition: opacity .15s;
+}
+
+.section-title-link:hover {
+    opacity: 1;
+}
+
 .webhook-list {
     display: flex;
     flex-direction: column;

@@ -454,21 +454,29 @@
                         <div class="status-chips" id="conversationDeviceChips"></div>
                     </div>
 
-                    <!-- Webhook 管理 -->
-                    <div style="margin-top:16px">
-                        <div class="section-title">
-                            <span class="material-symbols-outlined" style="font-size:18px">webhook</span>
-                            Webhook 回调
-                        </div>
-                        <div class="webhook-list" id="webhookList">
-                            <div class="empty-state" style="padding:12px;font-size:13px">暂无 Webhook</div>
-                        </div>
-                        <div class="webhook-add-row" style="margin-top:8px">
-                            <input type="text" class="text-field" id="webhookUrlInput" placeholder="输入回调 URL" style="flex:1" aria-label="Webhook 回调 URL">
-                            <button class="btn-filled btn-sm" id="addWebhookBtn">
-                                <span class="material-symbols-outlined" style="font-size:18px">add</span>
-                                添加
-                            </button>
+                    <button class="advanced-toggle" id="conversationAdvancedToggle" type="button" aria-expanded="false" aria-controls="conversationAdvancedPanel">
+                        <span class="advanced-toggle-title">高级配置</span>
+                        <span class="material-symbols-outlined advanced-chevron">chevron_right</span>
+                    </button>
+                    <div class="advanced-panel" id="conversationAdvancedPanel" hidden>
+                        <div style="margin-top:12px">
+                            <div class="section-title">
+                                <span class="material-symbols-outlined" style="font-size:18px">webhook</span>
+                                Webhook 回调
+                                <a href="https://songloft.hanxi.cc/issues/106.html" target="_blank" rel="noopener" class="section-title-link" title="查看文档">
+                                    <span class="material-symbols-outlined" style="font-size:16px">open_in_new</span>
+                                </a>
+                            </div>
+                            <div class="webhook-list" id="webhookList">
+                                <div class="empty-state" style="padding:12px;font-size:13px">暂无 Webhook</div>
+                            </div>
+                            <div class="webhook-add-row" style="margin-top:8px">
+                                <input type="text" class="text-field" id="webhookUrlInput" placeholder="输入回调 URL" style="flex:1" aria-label="Webhook 回调 URL">
+                                <button class="btn-filled btn-sm" id="addWebhookBtn">
+                                    <span class="material-symbols-outlined" style="font-size:18px">add</span>
+                                    添加
+                                </button>
+                            </div>
                         </div>
                     </div>
 
