@@ -150,6 +150,10 @@ export interface PluginConfig {
   touchscreen_lyrics_enabled?: boolean; // 触屏歌词：逐首匹配小米曲库以在触屏音箱显示歌词
   interrupt_tts_hint_enabled: boolean;
   interrupt_tts_hint_text: string;
+  play_announcement_enabled: boolean;
+  play_announcement_template: string;
+  play_announcement_wait_mode: 'auto' | 'fixed' | 'poll';
+  play_announcement_delay: number;
   conversation_poll_interval: number;
   conversation_poll_debug?: boolean; // 会话轮询调试日志开关，默认 false（稳态轮询不打冗余日志）
   smart_resume_timeout: number;

@@ -859,6 +859,49 @@
                 </div>
             </div>
 
+            <!-- 播放公告卡片 -->
+            <div class="card" data-category="voice">
+                <div class="card-header">
+                    <span class="material-symbols-outlined">campaign</span>
+                    播放公告
+                </div>
+                <div class="card-body">
+                    <div style="margin-bottom:12px;padding:8px 12px;background:rgba(0,0,0,0.03);border-radius:6px;font-size:13px;color:#666;line-height:1.5">
+                        搜索到歌曲后，先播报包含歌名的公告，等待播完再开始播放音乐。支持模板变量：<code>{song}</code> 歌名、<code>{artist}</code> 歌手。
+                    </div>
+                    <div class="switch-row">
+                        <div class="switch-row-label">
+                            <span class="switch-row-title">启用播放公告</span>
+                            <span class="switch-row-subtitle">播放前播报"即将播放XX的XX"等公告语</span>
+                        </div>
+                        <label class="switch">
+                            <input type="checkbox" id="playAnnouncementSwitch" aria-label="启用播放公告">
+                            <span class="switch-slider"></span>
+                        </label>
+                    </div>
+                    <div id="playAnnouncementPanel" style="display:none;margin-top:12px">
+                        <div style="font-size:12px;color:var(--md-on-surface-variant);margin-bottom:4px;font-weight:500">公告模板</div>
+                        <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
+                            <input type="text" id="playAnnouncementTemplate" class="text-field" style="flex:1;font-size:13px;padding:7px 10px" placeholder="即将播放{artist}的{song}" aria-label="公告模板">
+                            <button class="btn-filled" id="savePlayAnnouncementBtn" style="padding:6px 16px">
+                                <span class="material-symbols-outlined" style="font-size:16px">save</span>
+                            </button>
+                        </div>
+                        <div style="font-size:12px;color:var(--md-on-surface-variant);margin-bottom:4px;font-weight:500">等待模式</div>
+                        <select id="playAnnouncementWaitMode" class="text-field" style="font-size:13px;padding:7px 10px;margin-bottom:12px" aria-label="等待模式">
+                            <option value="auto">自动估算（按文字长度）</option>
+                            <option value="fixed">固定延迟</option>
+                            <option value="poll">轮询设备状态</option>
+                        </select>
+                        <div id="playAnnouncementDelayPanel" style="display:none">
+                            <div style="font-size:12px;color:var(--md-on-surface-variant);margin-bottom:4px;font-weight:500">固定延迟（秒）</div>
+                            <input type="number" id="playAnnouncementDelay" class="text-field" style="font-size:13px;padding:7px 10px;width:80px" min="0" max="10" value="3" aria-label="固定延迟秒数">
+                            <div style="margin-top:4px;font-size:12px;color:#999">播报公告后等待的秒数，0-10 秒</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <!-- URL 播放卡片 -->
             <div class="card" data-category="toolbox">
                 <div class="card-header">

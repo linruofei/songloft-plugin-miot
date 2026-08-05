@@ -207,6 +207,30 @@ export function loadConfig() {
                 interruptTtsText.value = data.data.interrupt_tts_hint_text || '正在搜索，请稍候';
             }
 
+            // 播放公告配置
+            const playAnnounceEnabled = !!data.data.play_announcement_enabled;
+            const playAnnounceSwitch = document.getElementById('playAnnouncementSwitch');
+            if (playAnnounceSwitch) {
+                playAnnounceSwitch.checked = playAnnounceEnabled;
+            }
+            updatePlayAnnouncementPanel(playAnnounceEnabled);
+
+            const playAnnounceTemplate = document.getElementById('playAnnouncementTemplate');
+            if (playAnnounceTemplate) {
+                playAnnounceTemplate.value = data.data.play_announcement_template || '即将播放{artist}的{song}';
+            }
+
+            const playAnnounceMode = document.getElementById('playAnnouncementWaitMode');
+            if (playAnnounceMode) {
+                playAnnounceMode.value = data.data.play_announcement_wait_mode || 'auto';
+            }
+            updatePlayAnnouncementDelayPanel(data.data.play_announcement_wait_mode || 'auto');
+
+            const playAnnounceDelay = document.getElementById('playAnnouncementDelay');
+            if (playAnnounceDelay) {
+                playAnnounceDelay.value = data.data.play_announcement_delay ?? 3;
+            }
+
             // 时区
             const timezoneSelect = document.getElementById('timezoneSelect');
             if (timezoneSelect && data.data.timezone) {
@@ -1535,6 +1559,104 @@ export function initInterruptBroadcastUI() {
     }
 }
 
+// ========== 播放公告配置 ==========
+
+function updatePlayAnnouncementPanel(enabled) {
+    const panel = document.getElementById('playAnnouncementPanel');
+    if (panel) {
+        panel.style.display = enabled ? 'block' : 'none';
+    }
+}
+
+function updatePlayAnnouncementDelayPanel(mode) {
+    const panel = document.getElementById('playAnnouncementDelayPanel');
+    if (panel) {
+        panel.style.display = mode === 'fixed' ? 'block' : 'none';
+    }
+}
+
+export function initPlayAnnouncementUI() {
+    const switchEl = document.getElementById('playAnnouncementSwitch');
+    if (switchEl) {
+        switchEl.addEventListener('change', function() {
+            const enabled = this.checked;
+            updatePlayAnnouncementPanel(enabled);
+            apiPost('/config', { play_announcement_enabled: enabled })
+                .then(data => {
+                    if (data.success) {
+                        showSnackbar(enabled ? '已启用播放公告' : '已关闭播放公告', 'success');
+                    } else {
+                        showSnackbar('操作失败：' + (data.error || '未知错误'), 'error');
+                        switchEl.checked = !enabled;
+                        updatePlayAnnouncementPanel(!enabled);
+                    }
+                })
+                .catch(error => {
+                    showSnackbar('操作失败：' + error.message, 'error');
+                    switchEl.checked = !enabled;
+                    updatePlayAnnouncementPanel(!enabled);
+                });
+        });
+    }
+
+    const saveBtn = document.getElementById('savePlayAnnouncementBtn');
+    if (saveBtn) {
+        saveBtn.addEventListener('click', function() {
+            const input = document.getElementById('playAnnouncementTemplate');
+            const text = input ? input.value.trim() : '';
+            apiPost('/config', { play_announcement_template: text || '即将播放{artist}的{song}' })
+                .then(data => {
+                    if (data.success) {
+                        showSnackbar('公告模板已保存', 'success');
+                    } else {
+                        showSnackbar('保存失败：' + (data.error || '未知错误'), 'error');
+                    }
+                })
+                .catch(error => {
+                    showSnackbar('保存失败：' + error.message, 'error');
+                });
+        });
+    }
+
+    const modeSelect = document.getElementById('playAnnouncementWaitMode');
+    if (modeSelect) {
+        modeSelect.addEventListener('change', function() {
+            const mode = this.value;
+            updatePlayAnnouncementDelayPanel(mode);
+            apiPost('/config', { play_announcement_wait_mode: mode })
+                .then(data => {
+                    if (data.success) {
+                        showSnackbar('等待模式已保存', 'success');
+                    } else {
+                        showSnackbar('保存失败：' + (data.error || '未知错误'), 'error');
+                    }
+                })
+                .catch(error => {
+                    showSnackbar('保存失败：' + error.message, 'error');
+                });
+        });
+    }
+
+    const delayInput = document.getElementById('playAnnouncementDelay');
+    if (delayInput) {
+        delayInput.addEventListener('change', function() {
+            const val = Math.max(0, Math.min(10, parseInt(this.value) || 3));
+            this.value = val;
+            apiPost('/config', { play_announcement_delay: val })
+                .then(data => {
+                    if (data.success) {
+                        showSnackbar('延迟已保存', 'success');
+                    } else {
+                        showSnackbar('保存失败：' + (data.error || '未知错误'), 'error');
+                    }
+                })
+                .catch(error => {
+                    showSnackbar('保存失败：' + error.message, 'error');
+                });
+        });
+    }
+}
+
 /**
  * 切换强制 MP3 开关
  */
@@ -1996,7 +2118,7 @@ function initVoiceCommandTest() {
  * 渲染口令测试结果
  * @param {HTMLElement} el - 结果容器
  * @param {object} d - CommandTestResult
- * @param {number} [elapsedMs] - 请求耗时（毫秒）
+ * @param {number} [elapsedMs] - 请求耗��（毫秒）
  */
 function renderVoiceCmdTestResult(el, d, elapsedMs) {
     const elapsedLine = typeof elapsedMs === 'number' ? '耗时: ' + elapsedMs + ' ms' : null;

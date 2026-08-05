@@ -1213,6 +1213,9 @@ export class VoiceEngine {
     }
 
     const startIndex = Math.floor(Math.random() * fullSongs.length);
+
+    await this.announceArtistPlay(cleanArtist, accountId, deviceId);
+
     const ok = await pm.playWithSongs(fullSongs as any, startIndex, 'random', '歌手: ' + cleanArtist, cleanArtist);
     if (!ok) {
       songloft.log.error(`[VoiceEngine] play_artist failed for "${cleanArtist}"`);
@@ -1504,6 +1507,8 @@ export class VoiceEngine {
     accountId: string,
     deviceId: string,
   ): Promise<PlayedSong | null> {
+    await this.announceBeforePlay(candidate, accountId, deviceId);
+
     switch (candidate.source) {
       case 'local_index': {
         const playedLoc = await this.playIndexedSong(candidate.loc, pm, searchTerm, requestedSongName, accountId, deviceId);
@@ -1857,6 +1862,87 @@ export class VoiceEngine {
     } else {
       songloft.log.warn('[VoiceEngine] Failed to restore playback after voice interaction');
       await pm.stop();
+    }
+  }
+
+  private extractCandidateInfo(candidate: SongSearchCandidate): { title: string; artist: string } {
+    switch (candidate.source) {
+      case 'local_index':
+        return { title: candidate.loc.songTitle, artist: candidate.loc.artist };
+      case 'remote_song':
+        return { title: candidate.song.title, artist: candidate.song.artist };
+      case 'external_search':
+        return { title: candidate.song.title, artist: candidate.song.artist || '' };
+    }
+  }
+
+  private async announceBeforePlay(
+    candidate: SongSearchCandidate,
+    accountId: string,
+    deviceId: string,
+  ): Promise<void> {
+    const config = await this.configManager.getConfig();
+    if (!config.play_announcement_enabled) return;
+
+    const { title, artist } = this.extractCandidateInfo(candidate);
+    if (!title) return;
+
+    const text = (config.play_announcement_template || '即将播放{artist}的{song}')
+      .replace(/\{song\}/g, title)
+      .replace(/\{artist\}/g, artist || '未知歌手');
+
+    if (!text.trim()) return;
+
+    songloft.log.info(`[VoiceEngine] Play announcement: "${text}" mode=${config.play_announcement_wait_mode}`);
+    await this.minaService.textToSpeech(accountId, deviceId, text);
+    await this.waitAfterAnnouncement(config, text.length, accountId, deviceId);
+  }
+
+  private async announceArtistPlay(artist: string, accountId: string, deviceId: string): Promise<void> {
+    const config = await this.configManager.getConfig();
+    if (!config.play_announcement_enabled) return;
+
+    const text = (config.play_announcement_template || '即将播放{artist}的{song}')
+      .replace(/\{song\}/g, '歌曲')
+      .replace(/\{artist\}/g, artist || '未知歌手');
+
+    if (!text.trim()) return;
+
+    songloft.log.info(`[VoiceEngine] Play announcement (artist): "${text}" mode=${config.play_announcement_wait_mode}`);
+    await this.minaService.textToSpeech(accountId, deviceId, text);
+    await this.waitAfterAnnouncement(config, text.length, accountId, deviceId);
+  }
+
+  private async waitAfterAnnouncement(
+    config: { play_announcement_wait_mode: string; play_announcement_delay: number },
+    textLength: number,
+    accountId: string,
+    deviceId: string,
+  ): Promise<void> {
+    switch (config.play_announcement_wait_mode) {
+      case 'fixed': {
+        const delay = Math.max(0, Math.min(10, config.play_announcement_delay || 3));
+        await new Promise(r => setTimeout(r, delay * 1000));
+        break;
+      }
+      case 'poll': {
+        const maxWaitMs = Math.min(15000, Math.ceil(textLength / 4) * 1500 + 2000);
+        const pollInterval = 800;
+        const startTime = Date.now();
+        await new Promise(r => setTimeout(r, 1000));
+        while (Date.now() - startTime < maxWaitMs) {
+          const { status } = await this.minaService.getPlayState(accountId, deviceId);
+          if (status !== 1) break;
+          await new Promise(r => setTimeout(r, pollInterval));
+        }
+        break;
+      }
+      case 'auto':
+      default: {
+        const estimatedMs = Math.ceil(textLength / 4) * 1000 + 1000;
+        await new Promise(r => setTimeout(r, estimatedMs));
+        break;
+      }
     }
   }
 
