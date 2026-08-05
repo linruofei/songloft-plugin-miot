@@ -272,6 +272,10 @@ export interface AIAnalysisResult {
     direction?: string;
     /** favorite 操作：add=收藏当前歌曲 / remove=取消收藏 */
     action?: string;
+    /** sleep_timer：定时停止的分钟数 */
+    duration?: number;
+    /** sleep_timer：定时停止的曲目数 */
+    songs_count?: number;
   };
   /** AI 置信度 */
   confidence: 'high' | 'medium' | 'low';

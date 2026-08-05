@@ -38,6 +38,10 @@ import {
     selectPlayMode,
     toggleVolumePanel,
     closeVolumePanel,
+    toggleSleepTimerPanel,
+    closeSleepTimerPanel,
+    toggleFavorite,
+    refreshFavoriteStatus,
     closeAllPopups,
     stopPlaylist
 } from './playback.js';
@@ -281,6 +285,8 @@ window.closePlayModePanel = closePlayModePanel;
 window.selectPlayMode = selectPlayMode;
 window.toggleVolumePanel = toggleVolumePanel;
 window.closeVolumePanel = closeVolumePanel;
+window.toggleSleepTimerPanel = toggleSleepTimerPanel;
+window.closeSleepTimerPanel = closeSleepTimerPanel;
 window.closeAllPopups = closeAllPopups;
 window.togglePlaylistSelectPanel = togglePlaylistSelectPanel;
 window.closePlaylistSelectPanel = closePlaylistSelectPanel;
@@ -483,6 +489,16 @@ document.addEventListener('DOMContentLoaded', () => {
     const playModeBtn = document.getElementById('playModeBtn');
     if (playModeBtn) {
         playModeBtn.addEventListener('click', togglePlayModePanel);
+    }
+
+    const sleepTimerBtn = document.getElementById('sleepTimerBtn');
+    if (sleepTimerBtn) {
+        sleepTimerBtn.addEventListener('click', toggleSleepTimerPanel);
+    }
+
+    const favoriteBtn = document.getElementById('favoriteBtn');
+    if (favoriteBtn) {
+        favoriteBtn.addEventListener('click', toggleFavorite);
     }
 
     // ========== 账号登录 ==========

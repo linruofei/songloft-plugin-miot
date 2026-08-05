@@ -1869,6 +1869,9 @@ const voiceCommandTypeLabels = {
     'next': '下一首',
     'previous': '上一首',
     'stop': '停止播放',
+    'sleep_timer': '定时停止',
+    'cancel_sleep_timer': '取消定时',
+    'query_sleep_timer': '查询定时',
 };
 
 /** 口令类型图标映射 */
@@ -1882,6 +1885,9 @@ const voiceCommandTypeIcons = {
     'next': 'skip_next',
     'previous': 'skip_previous',
     'stop': 'stop',
+    'sleep_timer': 'bedtime',
+    'cancel_sleep_timer': 'timer_off',
+    'query_sleep_timer': 'timer',
 };
 
 /** 播放模式参数显示名称 */

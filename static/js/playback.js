@@ -327,6 +327,7 @@ export function updatePlayerUI(status) {
             currentLyricUrl = lyricUrl;
             lastBarLyricIndex = -1; // 换歌词源，重置高亮索引强制刷新
             fetchLyrics(status.current_song.id);
+            refreshFavoriteStatus();
         }
     } else {
         currentLyricUrl = '';
@@ -758,6 +759,7 @@ export function initializePlaybackControls() {
 export function closeAllPopups() {
     closePlayModePanel();
     closeVolumePanel();
+    closeSleepTimerPanel();
     closeDeviceSelectPanel();
 }
 
@@ -1057,4 +1059,222 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+}
+
+// ========== Sleep Timer ==========
+
+let sleepTimerPollTimer = null;
+
+/**
+ * 打开/关闭 sleep timer 面板
+ */
+export function toggleSleepTimerPanel(e) {
+    const panel = document.getElementById('sleepTimerPanel');
+    const backdrop = document.getElementById('sleepTimerBackdrop');
+    const btn = e?.currentTarget || document.getElementById('sleepTimerBtn');
+    if (!panel || !backdrop || !btn) return;
+
+    if (panel.classList.contains('show')) {
+        closeSleepTimerPanel();
+        return;
+    }
+
+    closeAllPopups();
+    refreshSleepTimerStatus();
+
+    const rect = btn.getBoundingClientRect();
+    const panelWidth = panel.offsetWidth || 220;
+    let left = rect.left + rect.width / 2 - panelWidth / 2;
+    if (left < 16) left = 16;
+    if (left + panelWidth > window.innerWidth - 16) left = window.innerWidth - panelWidth - 16;
+    panel.style.left = left + 'px';
+    panel.style.bottom = (window.innerHeight - rect.top + 8) + 'px';
+
+    panel.classList.add('show');
+    backdrop.style.display = 'block';
+}
+
+export function closeSleepTimerPanel() {
+    const panel = document.getElementById('sleepTimerPanel');
+    const backdrop = document.getElementById('sleepTimerBackdrop');
+    if (panel) panel.classList.remove('show');
+    if (backdrop) backdrop.style.display = 'none';
+}
+
+/**
+ * 刷新 sleep timer 状态显示
+ */
+function refreshSleepTimerStatus() {
+    const accountId = getAccountId();
+    const deviceId = getDeviceId();
+    if (!accountId || !deviceId) return;
+
+    apiGet('/voice-commands/sleep-timer?account_id=' + encodeURIComponent(accountId) + '&device_id=' + encodeURIComponent(deviceId))
+        .then(data => {
+            if (data.success) {
+                updateSleepTimerUI(data.data);
+            }
+        })
+        .catch(() => {});
+}
+
+/**
+ * 更新 sleep timer UI 状态
+ */
+function updateSleepTimerUI(state) {
+    const statusEl = document.getElementById('sleepTimerStatus');
+    const statusText = document.getElementById('sleepTimerStatusText');
+    const presetsEl = document.getElementById('sleepTimerPresets');
+    const badge = document.getElementById('sleepTimerBadge');
+    const btn = document.getElementById('sleepTimerBtn');
+
+    if (!state || !state.active) {
+        if (statusEl) statusEl.style.display = 'none';
+        if (presetsEl) presetsEl.style.display = '';
+        if (badge) badge.style.display = 'none';
+        if (btn) btn.classList.remove('active');
+        stopSleepTimerPoll();
+        return;
+    }
+
+    if (statusEl) statusEl.style.display = 'flex';
+    if (presetsEl) presetsEl.style.display = 'none';
+    if (btn) btn.classList.add('active');
+
+    let text = '';
+    if (state.mode === 'songs') {
+        text = '还剩 ' + state.remaining + ' 首后停止';
+        if (badge) { badge.textContent = state.remaining + '首'; badge.style.display = ''; }
+    } else {
+        const min = Math.ceil(state.remaining / 60000);
+        if (min >= 60) {
+            const h = Math.floor(min / 60);
+            const m = min % 60;
+            text = m > 0 ? '还剩 ' + h + '小时' + m + '分钟' : '还剩 ' + h + '小时';
+        } else {
+            text = '还剩 ' + min + ' 分钟';
+        }
+        if (badge) { badge.textContent = min + '分'; badge.style.display = ''; }
+    }
+    if (statusText) statusText.textContent = text;
+
+    startSleepTimerPoll();
+}
+
+/**
+ * 设置 sleep timer（前端按钮触发）
+ */
+window.setSleepTimerUI = function(mode, value) {
+    const accountId = getAccountId();
+    const deviceId = getDeviceId();
+    if (!accountId || !deviceId) {
+        showSnackbar('请先选择设备', 'error');
+        return;
+    }
+
+    const query = mode === 'songs'
+        ? value + '首歌后停止播放'
+        : value + '分钟后停止播放';
+
+    apiPost('/voice-commands/said', { message: query, device_id: deviceId })
+        .then(data => {
+            if (data.success) {
+                showSnackbar(mode === 'songs' ? '已设置' + value + '首后停止' : '已设置' + value + '分钟后停止', 'success');
+                setTimeout(() => refreshSleepTimerStatus(), 500);
+                closeSleepTimerPanel();
+            } else {
+                showSnackbar('设置失败: ' + (data.error || ''), 'error');
+            }
+        })
+        .catch(err => showSnackbar('设置失败: ' + err.message, 'error'));
+};
+
+/**
+ * 取消 sleep timer（前端按钮触发）
+ */
+window.cancelSleepTimerUI = function() {
+    const accountId = getAccountId();
+    const deviceId = getDeviceId();
+    if (!accountId || !deviceId) return;
+
+    apiPost('/voice-commands/sleep-timer/cancel', { account_id: accountId, device_id: deviceId })
+        .then(data => {
+            if (data.success) {
+                showSnackbar('已取消定时停止', 'success');
+                refreshSleepTimerStatus();
+            }
+        })
+        .catch(() => {});
+};
+
+window.closeSleepTimerPanel = closeSleepTimerPanel;
+
+function startSleepTimerPoll() {
+    if (sleepTimerPollTimer) return;
+    sleepTimerPollTimer = setInterval(refreshSleepTimerStatus, 30000);
+}
+
+function stopSleepTimerPoll() {
+    if (sleepTimerPollTimer) {
+        clearInterval(sleepTimerPollTimer);
+        sleepTimerPollTimer = null;
+    }
+}
+
+// ========== Favorite ==========
+
+let currentFavorited = false;
+
+/**
+ * 切换收藏状态
+ */
+export function toggleFavorite() {
+    const accountId = getAccountId();
+    const deviceId = getDeviceId();
+    if (!accountId || !deviceId) return;
+
+    const action = currentFavorited ? 'remove' : 'add';
+    apiPost('/player/favorite/toggle?account_id=' + encodeURIComponent(accountId) + '&device_id=' + encodeURIComponent(deviceId), { action })
+        .then(data => {
+            if (data.success) {
+                currentFavorited = data.data.is_favorited;
+                updateFavoriteIcon(currentFavorited);
+                showSnackbar(currentFavorited ? '已收藏' : '已取消收藏', 'success');
+            } else {
+                showSnackbar(data.error || '操作失败', 'error');
+            }
+        })
+        .catch(err => showSnackbar('操作失败: ' + err.message, 'error'));
+}
+
+/**
+ * 刷新收藏状态（当歌曲切换时调用）
+ */
+export function refreshFavoriteStatus() {
+    const accountId = getAccountId();
+    const deviceId = getDeviceId();
+    if (!accountId || !deviceId) return;
+
+    apiGet('/player/favorite/status?account_id=' + encodeURIComponent(accountId) + '&device_id=' + encodeURIComponent(deviceId))
+        .then(data => {
+            if (data.success) {
+                currentFavorited = !!data.data.is_favorited;
+                updateFavoriteIcon(currentFavorited);
+            }
+        })
+        .catch(() => {});
+}
+
+function updateFavoriteIcon(favorited) {
+    const btn = document.getElementById('favoriteBtn');
+    if (!btn) return;
+    const icon = btn.querySelector('.material-symbols-outlined');
+    if (icon) {
+        icon.textContent = favorited ? 'favorite' : 'favorite_border';
+    }
+    if (favorited) {
+        btn.classList.add('active');
+    } else {
+        btn.classList.remove('active');
+    }
 }

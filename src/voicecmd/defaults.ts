@@ -17,5 +17,8 @@ export function getDefaultVoiceCommands(): VoiceCommand[] {
     { type: 'stop', keywords: ['暂停播放', '停止播放', '暂停音乐', '停一下', 'pause', 'stop', '停止', '别播了', '关掉音乐', '关机', '关闭', '暂停'], enabled: true },
     { type: 'favorite', keywords: ['收藏歌曲', '收藏这首歌', '喜欢这首歌', '收藏这首'], param: 'add', enabled: true },
     { type: 'favorite', keywords: ['取消收藏', '取消收藏歌曲'], param: 'remove', enabled: true },
+    { type: 'sleep_timer', keywords: ['分钟后停止播放', '分钟后暂停播放', '分钟后停止', '分钟后关闭', '小时后停止播放', '小时后停止', '小时后关闭', '首歌后停止播放', '首歌后停止', '首后停止播放', '首后停止', '首歌后暂停', '首后关闭'], enabled: true },
+    { type: 'cancel_sleep_timer', keywords: ['取消定时', '取消倒计时', '取消睡眠定时', '取消定时停止'], enabled: true },
+    { type: 'query_sleep_timer', keywords: ['还有多久停', '定时还剩', '倒计时还剩', '还剩多久'], enabled: true },
   ];
 }

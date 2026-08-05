@@ -16,6 +16,7 @@ import { OnlineSearcher } from './online_searcher';
 import { updateDeviceStatusCache } from '../handlers/playlist';
 import { callHostAPI, getHostAPIBaseUrl } from '../utils/http';
 import { MemoryService } from '../memory';
+import { SleepTimer, parseTimeDuration, parseSongsCount, detectSleepTimerMode, formatRemaining } from '../sleep_timer';
 import type { PlaylistManager } from '../player/manager';
 import type { SongLocation, ArtistSongLocation } from '../indexing/manager';
 import type { MemoryRecord } from '../memory';
@@ -128,7 +129,7 @@ const INDEX_READY_WAIT_MS = 5000;
 /** 本地独立歌曲 URL 健康检查超时（ms），利用 TTS 播报窗口期异步验证，不增加用户感知延迟。 */
 const URL_HEALTH_CHECK_TIMEOUT_MS = 3000;
 
-const FIXED_CONTROL_COMMAND_TYPES = new Set(['set_play_mode', 'set_volume', 'favorite', 'next', 'previous', 'stop']);
+const FIXED_CONTROL_COMMAND_TYPES = new Set(['set_play_mode', 'set_volume', 'favorite', 'next', 'previous', 'stop', 'sleep_timer', 'cancel_sleep_timer', 'query_sleep_timer']);
 const SEARCH_COMMAND_TYPES = new Set(['play_song', 'play_playlist', 'play_artist']);
 const BUILTIN_STOP_KEYWORDS = ['暂停播放', '停止播放', '暂停音乐', '停一下', 'pause', 'stop', '暂停'];
 
@@ -198,6 +199,7 @@ export class VoiceEngine {
   private enabled: boolean = false;
   private resumeTimer: any = null;
   private resumeCancelled: boolean = false;
+  private sleepTimers: Map<string, SleepTimer> = new Map();
 
   constructor(
     configManager: ConfigManager,
@@ -233,6 +235,30 @@ export class VoiceEngine {
     return this.enabled;
   }
 
+  /** 获取指定设备的 sleep timer 状态 */
+  getSleepTimerState(accountId: string, deviceId: string): { active: boolean; mode: string; remaining: number; total: number } {
+    const key = this.getSleepTimerKey(accountId, deviceId);
+    const timer = this.sleepTimers.get(key);
+    if (!timer || !timer.isActive()) {
+      return { active: false, mode: 'time', remaining: 0, total: 0 };
+    }
+    const state = timer.getState();
+    return { active: state.active, mode: state.mode, remaining: state.remaining, total: state.total };
+  }
+
+  /** 取消指定设备的 sleep timer */
+  cancelSleepTimer(accountId: string, deviceId: string): boolean {
+    const key = this.getSleepTimerKey(accountId, deviceId);
+    const timer = this.sleepTimers.get(key);
+    if (timer && timer.isActive()) {
+      timer.cancel();
+      const pm = this.playlistManagerMap.get(accountId, deviceId);
+      if (pm) pm.setOnAdvanceHook(undefined);
+      return true;
+    }
+    return false;
+  }
+
   /**
    * 处理新对话消息（由 ConversationMonitor 回调触发）
    * @param msg - 对话消息
@@ -261,7 +287,7 @@ export class VoiceEngine {
     const fixedResult = builtinStopResult ?? await this.matchCommand(query, FIXED_CONTROL_COMMAND_TYPES);
     if (fixedResult) {
       songloft.log.info(`[VoiceEngine] [Rule] → Matched fixed control: type=${fixedResult.command.type} keyword="${fixedResult.keyword}" argument="${fixedResult.argument}"`);
-      await this.executeCommand(fixedResult, accountId, msg.device_id);
+      await this.executeCommand(fixedResult, accountId, msg.device_id, query);
       return;
     }
 
@@ -573,7 +599,7 @@ export class VoiceEngine {
     const search = await this.previewSearch(result.command.type, result.argument);
     songloft.log.info(`[VoiceEngine] [Test] previewSearch done in ${Date.now() - previewStart}ms`);
     const execStart = Date.now();
-    await this.executeCommand(result, accountId, deviceId);
+    await this.executeCommand(result, accountId, deviceId, query);
     songloft.log.info(`[VoiceEngine] [Test] executeCommand done in ${Date.now() - execStart}ms (total ${Date.now() - ruleStart}ms)`);
     return {
       matched: true,
@@ -774,7 +800,7 @@ export class VoiceEngine {
   /**
    * 执行匹配到的口令
    */
-  private async executeCommand(result: MatchResult, accountId: string, deviceId: string): Promise<PlayedSong | null> {
+  private async executeCommand(result: MatchResult, accountId: string, deviceId: string, query?: string): Promise<PlayedSong | null> {
     const pm = this.playlistManagerMap.get(accountId, deviceId);
     const wasPlaying = pm?.isPlaying() ?? false;
     let playedSong: PlayedSong | null = null;
@@ -806,6 +832,15 @@ export class VoiceEngine {
         break;
       case 'favorite':
         await this.executeFavorite(accountId, deviceId, result.command.param || 'add');
+        break;
+      case 'sleep_timer':
+        await this.executeSleepTimer(query || result.argument, accountId, deviceId);
+        break;
+      case 'cancel_sleep_timer':
+        await this.executeCancelSleepTimer(accountId, deviceId);
+        break;
+      case 'query_sleep_timer':
+        await this.executeQuerySleepTimer(accountId, deviceId);
         break;
       default:
         songloft.log.warn(`[VoiceEngine] Unknown command type: ${result.command.type}`);
@@ -885,6 +920,15 @@ export class VoiceEngine {
         break;
       case 'favorite':
         await this.executeFavorite(accountId, deviceId, result.params?.action || 'add');
+        break;
+      case 'sleep_timer':
+        await this.executeSleepTimerFromAI(result, accountId, deviceId);
+        break;
+      case 'cancel_sleep_timer':
+        await this.executeCancelSleepTimer(accountId, deviceId);
+        break;
+      case 'query_sleep_timer':
+        await this.executeQuerySleepTimer(accountId, deviceId);
         break;
       default:
         songloft.log.warn(`[VoiceEngine] [AI] Unknown action: ${result.action}`);
@@ -1685,6 +1729,14 @@ export class VoiceEngine {
    */
   private async executeStop(accountId: string, deviceId: string): Promise<void> {
     this.cancelPendingResume();
+    // 主动停止时清除 sleep timer
+    const key = this.getSleepTimerKey(accountId, deviceId);
+    const sleepTimer = this.sleepTimers.get(key);
+    if (sleepTimer && sleepTimer.isActive()) {
+      sleepTimer.cancel();
+      const pm = this.playlistManagerMap.get(accountId, deviceId);
+      if (pm) pm.setOnAdvanceHook(undefined);
+    }
     const pm = await this.playlistManagerMap.getOrCreate(accountId, deviceId);
     await pm.stop();
     songloft.log.info(`[VoiceEngine] Playback stopped`);
@@ -1846,6 +1898,142 @@ export class VoiceEngine {
       }
     }
     return null;
+  }
+
+  // ===== SleepTimer 相关方法 =====
+
+  private getSleepTimerKey(accountId: string, deviceId: string): string {
+    return `${accountId}:${deviceId}`;
+  }
+
+  private getOrCreateSleepTimer(accountId: string, deviceId: string): SleepTimer {
+    const key = this.getSleepTimerKey(accountId, deviceId);
+    let timer = this.sleepTimers.get(key);
+    if (!timer) {
+      timer = new SleepTimer(async () => {
+        songloft.log.info(`[VoiceEngine] SleepTimer expired for ${key}, stopping playback`);
+        const pm = this.playlistManagerMap.get(accountId, deviceId);
+        if (pm) {
+          await pm.stop();
+        } else {
+          await this.minaService.stopPlay(accountId, deviceId);
+        }
+      });
+      this.sleepTimers.set(key, timer);
+    }
+    return timer;
+  }
+
+  /**
+   * 设置 SleepTimer 并注册 PlaylistManager hook（曲目模式用）
+   */
+  private setupSleepTimer(accountId: string, deviceId: string, mode: 'time' | 'songs', value: number): void {
+    const timer = this.getOrCreateSleepTimer(accountId, deviceId);
+
+    if (mode === 'time') {
+      timer.setTime(value);
+    } else {
+      timer.setSongs(value);
+      const pm = this.playlistManagerMap.get(accountId, deviceId);
+      if (pm) {
+        pm.setOnAdvanceHook(() => timer.onSongAdvanced());
+      }
+    }
+  }
+
+  /**
+   * 规则匹配路径：从原始 query 中提取时间/曲目参数并设置定时器
+   * @param query 原始语音文本（如 "30分钟后停止播放"、"再听3首后停"）
+   */
+  private async executeSleepTimer(query: string, accountId: string, deviceId: string): Promise<void> {
+    const mode = detectSleepTimerMode(query);
+    if (!mode) {
+      songloft.log.warn(`[VoiceEngine] [SleepTimer] 无法识别定时模式 query="${query}"`);
+      await this.minaService.textToSpeech(accountId, deviceId, '抱歉，无法识别定时时间');
+      return;
+    }
+
+    if (mode === 'songs') {
+      const count = parseSongsCount(query);
+      if (count <= 0) {
+        songloft.log.warn(`[VoiceEngine] [SleepTimer] 无法解析曲目数 query="${query}"`);
+        await this.minaService.textToSpeech(accountId, deviceId, '抱歉，无法识别曲目数');
+        return;
+      }
+      this.setupSleepTimer(accountId, deviceId, 'songs', count);
+      songloft.log.info(`[VoiceEngine] [SleepTimer] 设置曲目定时: ${count}首后停止`);
+      await this.minaService.textToSpeech(accountId, deviceId, `好的，再播${count}首后将停止播放`);
+    } else {
+      const minutes = parseTimeDuration(query);
+      if (minutes <= 0) {
+        songloft.log.warn(`[VoiceEngine] [SleepTimer] 无法解析时间 query="${query}"`);
+        await this.minaService.textToSpeech(accountId, deviceId, '抱歉，无法识别定时时间');
+        return;
+      }
+      this.setupSleepTimer(accountId, deviceId, 'time', minutes);
+      songloft.log.info(`[VoiceEngine] [SleepTimer] 设置时间定时: ${minutes}分钟后停止`);
+      const desc = minutes >= 60
+        ? (minutes % 60 === 0 ? `${minutes / 60}小时` : `${Math.floor(minutes / 60)}小时${minutes % 60}分钟`)
+        : `${minutes}分钟`;
+      await this.minaService.textToSpeech(accountId, deviceId, `好的，${desc}后将停止播放`);
+    }
+  }
+
+  /**
+   * AI 分析路径：从 AI 结果中提取参数并设置定时器
+   */
+  private async executeSleepTimerFromAI(result: AIAnalysisResult, accountId: string, deviceId: string): Promise<void> {
+    const { duration, songs_count } = result.params;
+
+    if (songs_count && songs_count > 0) {
+      this.setupSleepTimer(accountId, deviceId, 'songs', songs_count);
+      songloft.log.info(`[VoiceEngine] [SleepTimer] [AI] 设置曲目定时: ${songs_count}首后停止`);
+      await this.minaService.textToSpeech(accountId, deviceId, `好的，再播${songs_count}首后将停止播放`);
+    } else if (duration && duration > 0) {
+      this.setupSleepTimer(accountId, deviceId, 'time', duration);
+      songloft.log.info(`[VoiceEngine] [SleepTimer] [AI] 设置时间定时: ${duration}分钟后停止`);
+      const desc = duration >= 60
+        ? (duration % 60 === 0 ? `${duration / 60}小时` : `${Math.floor(duration / 60)}小时${duration % 60}分钟`)
+        : `${duration}分钟`;
+      await this.minaService.textToSpeech(accountId, deviceId, `好的，${desc}后将停止播放`);
+    } else {
+      songloft.log.warn(`[VoiceEngine] [SleepTimer] [AI] 参数无效: ${JSON.stringify(result.params)}`);
+      await this.minaService.textToSpeech(accountId, deviceId, '抱歉，无法识别定时时间');
+    }
+  }
+
+  /**
+   * 取消定时器
+   */
+  private async executeCancelSleepTimer(accountId: string, deviceId: string): Promise<void> {
+    const key = this.getSleepTimerKey(accountId, deviceId);
+    const timer = this.sleepTimers.get(key);
+    if (timer && timer.isActive()) {
+      timer.cancel();
+      const pm = this.playlistManagerMap.get(accountId, deviceId);
+      if (pm) {
+        pm.setOnAdvanceHook(undefined);
+      }
+      songloft.log.info(`[VoiceEngine] [SleepTimer] 已取消定时停止`);
+      await this.minaService.textToSpeech(accountId, deviceId, '已取消定时停止');
+    } else {
+      await this.minaService.textToSpeech(accountId, deviceId, '当前没有定时任务');
+    }
+  }
+
+  /**
+   * 查询定时器剩余
+   */
+  private async executeQuerySleepTimer(accountId: string, deviceId: string): Promise<void> {
+    const key = this.getSleepTimerKey(accountId, deviceId);
+    const timer = this.sleepTimers.get(key);
+    if (timer && timer.isActive()) {
+      const state = timer.getState();
+      const text = formatRemaining(state);
+      await this.minaService.textToSpeech(accountId, deviceId, text);
+    } else {
+      await this.minaService.textToSpeech(accountId, deviceId, '当前没有定时任务');
+    }
   }
 
 }

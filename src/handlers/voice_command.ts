@@ -1,7 +1,7 @@
 // MIoT 智能音箱插件 - 语音口令 Handler
 // 翻译自 Go 源码: plugins/songloft-plugin-xiaomi/handlers/voice_command_handler.go
 
-import { jsonResponse } from '@songloft/plugin-sdk';
+import { jsonResponse, parseQuery } from '@songloft/plugin-sdk';
 import type { Router, HTTPRequest } from '@songloft/plugin-sdk';
 import { AccountManager } from '../account/manager';
 import { ConfigManager } from '../config/manager';
@@ -224,6 +224,37 @@ export function registerVoiceCommandHandlers(
           device_name: target.device.device_name,
         },
       });
+    } catch (e: any) {
+      return jsonResponse({ success: false, error: e.message || String(e) });
+    }
+  });
+
+  // GET /voice-commands/sleep-timer?account_id=...&device_id=... - 查询 sleep timer 状态
+  router.get('/voice-commands/sleep-timer', async (req: HTTPRequest) => {
+    try {
+      const query = parseQuery(req.query);
+      const accountId = query.account_id as string;
+      const deviceId = query.device_id as string;
+      if (!accountId || !deviceId) {
+        return jsonResponse({ success: false, error: 'account_id and device_id are required' });
+      }
+      const state = voiceEngine.getSleepTimerState(accountId, deviceId);
+      return jsonResponse({ success: true, data: state });
+    } catch (e: any) {
+      return jsonResponse({ success: false, error: e.message || String(e) });
+    }
+  });
+
+  // POST /voice-commands/sleep-timer/cancel - 取消 sleep timer
+  router.post('/voice-commands/sleep-timer/cancel', async (req: HTTPRequest) => {
+    try {
+      const body = parseBody(req);
+      const { account_id: accountId, device_id: deviceId } = body;
+      if (!accountId || !deviceId) {
+        return jsonResponse({ success: false, error: 'account_id and device_id are required' });
+      }
+      const cancelled = voiceEngine.cancelSleepTimer(accountId, deviceId);
+      return jsonResponse({ success: true, data: { cancelled } });
     } catch (e: any) {
       return jsonResponse({ success: false, error: e.message || String(e) });
     }

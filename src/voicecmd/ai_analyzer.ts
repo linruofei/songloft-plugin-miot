@@ -14,6 +14,9 @@ const AI_SYSTEM_PROMPT = `从指令中提取出操作和音乐信息，返回JSO
 - play_playlist: playlist(歌单名)
 - set_play_mode: mode=order|random|single|loop(播放模式)
 - favorite: action=add|remove(收藏/取消收藏当前歌曲)
+- sleep_timer: duration(分钟数,整数)或songs_count(曲目数,整数)，两者只填一个。定时停止播放。
+- cancel_sleep_timer: 取消定时停止
+- query_sleep_timer: 查询定时剩余时间
 - next/previous/stop/unknown
 
 规则：
@@ -33,7 +36,14 @@ const AI_SYSTEM_PROMPT = `从指令中提取出操作和音乐信息，返回JSO
 来几首邓紫棋→{"action":"play_artist","params":{"artist":"邓紫棋"},"confidence":"high","rawText":"邓紫棋"}
 随机播放→{"action":"set_play_mode","params":{"mode":"random"},"confidence":"high","rawText":"随机播放"}
 收藏这首歌→{"action":"favorite","params":{"action":"add"},"confidence":"high","rawText":"收藏这首歌"}
-取消收藏→{"action":"favorite","params":{"action":"remove"},"confidence":"high","rawText":"取消收藏"}`;
+取消收藏→{"action":"favorite","params":{"action":"remove"},"confidence":"high","rawText":"取消收藏"}
+半小时后停止播放→{"action":"sleep_timer","params":{"duration":30},"confidence":"high","rawText":"半小时后停止播放"}
+30分钟后关闭→{"action":"sleep_timer","params":{"duration":30},"confidence":"high","rawText":"30分钟后关闭"}
+一个半小时后停→{"action":"sleep_timer","params":{"duration":90},"confidence":"high","rawText":"一个半小时后停"}
+再听3首就停→{"action":"sleep_timer","params":{"songs_count":3},"confidence":"high","rawText":"再听3首就停"}
+5首歌后停止播放→{"action":"sleep_timer","params":{"songs_count":5},"confidence":"high","rawText":"5首歌后停止播放"}
+取消定时→{"action":"cancel_sleep_timer","params":{},"confidence":"high","rawText":"取消定时"}
+还有多久停→{"action":"query_sleep_timer","params":{},"confidence":"high","rawText":"还有多久停"}`;
 
 /**
  * AI 口令分析器

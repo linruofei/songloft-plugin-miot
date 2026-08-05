@@ -96,6 +96,7 @@ export class PlaylistManager {
   // 播放/暂停/停止/切歌等指令统一下发给 targets 里的所有音箱，从根本上保证多房间同步、随机不跑偏。
   // accountId/deviceId 仍作为「主设备」用于持久化、日志与自动切歌定时器的进度校准参考。
   private targets: DeviceTargetRef[];
+  private onAdvanceHook?: () => boolean;
 
   constructor(
     accountId: string,
@@ -112,6 +113,14 @@ export class PlaylistManager {
   }
 
   // ===== 公开方法 =====
+
+  /**
+   * 设置切歌前的 hook 回调。返回 true 表示拦截切歌并停止播放。
+   * 用于 SleepTimer 曲目模式：每切一首递减计数，归零时拦截。
+   */
+  setOnAdvanceHook(hook: (() => boolean) | undefined): void {
+    this.onAdvanceHook = hook;
+  }
 
   /**
    * 播放歌单
@@ -1094,7 +1103,7 @@ export class PlaylistManager {
       return;
     }
     // 分组共用一个 PlaylistManager：这里的切歌会经 playCurrent 一次性下发给组内所有音箱，
-    // 只有一份队列/随机数/定时器，天然全组同一首，无需组长选举或成员间同步。
+    // 只有一份队列/随机数/定时器，天然全组同���首，无需组长选举或成员间同���。
     await this.advanceToNext();
   }
 
@@ -1103,6 +1112,12 @@ export class PlaylistManager {
    */
   private async advanceToNext(): Promise<void> {
     songloft.log.info(`[PlaylistManager] Song finished, advancing from index=${this.currentIndex}`);
+
+    if (this.onAdvanceHook && this.onAdvanceHook()) {
+      songloft.log.info('[PlaylistManager] onAdvanceHook returned true, stopping playback');
+      await this.stop();
+      return;
+    }
 
     // 通知后端当前歌曲播放完成（触发 JS 插件播放事件广播）
     const finishedSong = this.songs[this.currentIndex];

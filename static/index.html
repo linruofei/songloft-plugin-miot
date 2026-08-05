@@ -1036,6 +1036,9 @@
             <span class="progress-time" id="totalTime">0:00</span>
         </div>
         <div class="playback-controls">
+            <button class="btn-icon" id="favoriteBtn" title="收藏">
+                <span class="material-symbols-outlined">favorite_border</span>
+            </button>
             <button class="btn-icon" id="playModeBtn" title="播放模式">
                 <span class="material-symbols-outlined">repeat</span>
             </button>
@@ -1050,6 +1053,10 @@
             </button>
             <button class="btn-icon" id="stopBtn" title="停止">
                 <span class="material-symbols-outlined">stop_circle</span>
+            </button>
+            <button class="btn-icon" id="sleepTimerBtn" title="定时停止" style="position:relative">
+                <span class="material-symbols-outlined">bedtime</span>
+                <span class="sleep-timer-badge" id="sleepTimerBadge" style="display:none"></span>
             </button>
         </div>
     </div>
@@ -1108,6 +1115,34 @@
         <div class="play-mode-item" data-mode="single-once" onclick="selectPlayMode('single-once')">
             <span class="material-symbols-outlined">looks_one</span>
             <span>单曲播放</span>
+        </div>
+    </div>
+
+    <!-- Sleep Timer 弹出面板 -->
+    <div id="sleepTimerBackdrop" class="popup-backdrop" style="display:none" onclick="closeSleepTimerPanel()"></div>
+    <div id="sleepTimerPanel" class="popup-panel sleep-timer-panel">
+        <div class="sleep-timer-status" id="sleepTimerStatus" style="display:none">
+            <span class="material-symbols-outlined" style="font-size:16px;color:var(--md-primary)">bedtime</span>
+            <span id="sleepTimerStatusText"></span>
+            <button class="btn-text btn-sm" onclick="cancelSleepTimerUI()" style="margin-left:auto;color:var(--md-error)">取消</button>
+        </div>
+        <div class="sleep-timer-presets" id="sleepTimerPresets">
+            <div class="sleep-timer-section-title">按时间</div>
+            <div class="sleep-timer-grid">
+                <button class="sleep-timer-preset" onclick="setSleepTimerUI('time', 15)">15分钟</button>
+                <button class="sleep-timer-preset" onclick="setSleepTimerUI('time', 30)">30分钟</button>
+                <button class="sleep-timer-preset" onclick="setSleepTimerUI('time', 45)">45分钟</button>
+                <button class="sleep-timer-preset" onclick="setSleepTimerUI('time', 60)">1小时</button>
+                <button class="sleep-timer-preset" onclick="setSleepTimerUI('time', 90)">1.5小时</button>
+                <button class="sleep-timer-preset" onclick="setSleepTimerUI('time', 120)">2小时</button>
+            </div>
+            <div class="sleep-timer-section-title" style="margin-top:10px">按曲目</div>
+            <div class="sleep-timer-grid">
+                <button class="sleep-timer-preset" onclick="setSleepTimerUI('songs', 1)">1首后</button>
+                <button class="sleep-timer-preset" onclick="setSleepTimerUI('songs', 3)">3首后</button>
+                <button class="sleep-timer-preset" onclick="setSleepTimerUI('songs', 5)">5首后</button>
+                <button class="sleep-timer-preset" onclick="setSleepTimerUI('songs', 10)">10首后</button>
+            </div>
         </div>
     </div>
 
