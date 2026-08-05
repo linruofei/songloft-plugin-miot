@@ -1103,7 +1103,7 @@ export class PlaylistManager {
       return;
     }
     // 分组共用一个 PlaylistManager：这里的切歌会经 playCurrent 一次性下发给组内所有音箱，
-    // 只有一份队列/随机数/定时器，天然全组同���首，无需组长选举或成员间同���。
+    // 只有一份队列/随机数/定时器，天然全组同一首，无需组长选举或成员间同步。
     await this.advanceToNext();
   }
 

@@ -1285,7 +1285,7 @@ export class VoiceEngine {
     if (!local) {
       return null;
     }
-    return await this.playSongCandidate(local, pm, searchTerm, songName, accountId, deviceId);
+    return await this.playSongCandidate(local, pm, searchTerm, songName, accountId, deviceId, !!external);
   }
 
   /**
@@ -1337,7 +1337,7 @@ export class VoiceEngine {
         songloft.log.warn(`[VoiceEngine] Parallel fallback: source=${failedSource} found a candidate but failed to play, retrying with source=${race.candidate.source} keyword="${songName}"`);
       }
 
-      const played = await this.playSongCandidate(race.candidate, pm, searchTerm, songName, accountId, deviceId);
+      const played = await this.playSongCandidate(race.candidate, pm, searchTerm, songName, accountId, deviceId, failedSource !== null);
       if (played) {
         return played;
       }
@@ -1506,8 +1506,11 @@ export class VoiceEngine {
     requestedSongName: string,
     accountId: string,
     deviceId: string,
+    skipAnnouncement?: boolean,
   ): Promise<PlayedSong | null> {
-    await this.announceBeforePlay(candidate, accountId, deviceId);
+    if (!skipAnnouncement) {
+      await this.announceBeforePlay(candidate, accountId, deviceId);
+    }
 
     switch (candidate.source) {
       case 'local_index': {
@@ -2042,7 +2045,7 @@ export class VoiceEngine {
     if (mode === 'songs') {
       const count = parseSongsCount(query);
       if (count <= 0) {
-        songloft.log.warn(`[VoiceEngine] [SleepTimer] 无法解析曲目数 query="${query}"`);
+        songloft.log.warn(`[VoiceEngine] [SleepTimer] ���法解析曲目数 query="${query}"`);
         await this.minaService.textToSpeech(accountId, deviceId, '抱歉，无法识别曲目数');
         return;
       }
