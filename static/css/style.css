@@ -727,6 +727,25 @@ html[data-theme="dark"] {
     gap: 8px;
 }
 
+.song-list.virtual-scroll {
+    overflow-y: auto;
+    position: relative;
+    gap: 0;
+    height: calc(100vh - 320px);
+    min-height: 300px;
+}
+
+.song-list-spacer {
+    width: 100%;
+    pointer-events: none;
+}
+
+.song-list.virtual-scroll .song-item {
+    position: absolute;
+    left: 0;
+    right: 0;
+}
+
 .song-list-empty {
     text-align: center;
     padding: 40px 20px;

@@ -549,7 +549,7 @@ export class IndexingManager {
 
         const pl = playlists[idx];
         try {
-          const plSongs = (await songloft.playlists.getSongs(pl.id, { limit: 100000 })) ?? [];
+          const plSongs = (await songloft.playlists.getSongs(pl.id, { limit: 100000, brief: true } as any)) ?? [];
           if (token !== this.playlistCacheToken) return;
           this.playlistSongsCache.set(pl.id, await this.buildCachedPlaylistSongs(plSongs));
           this.playlistCacheLoadedIds.add(pl.id);

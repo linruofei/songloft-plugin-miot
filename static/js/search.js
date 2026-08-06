@@ -3,6 +3,8 @@
  * 提供歌单搜索和歌曲筛选功能
  */
 
+import { getVirtualSongList } from './playlist.js';
+
 /**
  * 初始化歌单搜索（在歌单列表渲染完成后调用）
  */
@@ -49,8 +51,14 @@ export function initSongSearch() {
 function handleSongSearch() {
     const input = document.getElementById('songSearchInput');
     const keyword = (input.value || '').trim().toLowerCase();
-    const items = document.querySelectorAll('#songList .song-item');
 
+    const vsl = getVirtualSongList();
+    if (vsl && vsl.enabled) {
+        vsl.filter(keyword);
+        return;
+    }
+
+    const items = document.querySelectorAll('#songList .song-item');
     items.forEach(item => {
         if (!keyword) {
             item.style.display = '';

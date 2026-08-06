@@ -306,7 +306,7 @@ export function registerPlaylistHandlers(
         }
         return jsonResponse({ success: true, data: manager.getSongs() });
       }
-      const songs = await songloft.playlists.getSongs(playlistId, { limit: 100000 });
+      const songs = await songloft.playlists.getSongs(playlistId, { limit: 100000, brief: true } as any);
       return jsonResponse({ success: true, data: songs });
     } catch (e: any) {
       return jsonResponse({ success: false, error: e.message || String(e) });
@@ -603,7 +603,7 @@ export function registerPlaylistHandlers(
       if (!favPlaylist) {
         return jsonResponse({ success: true, data: { is_favorited: false } });
       }
-      const songs = await songloft.playlists.getSongs(favPlaylist.id, { limit: 100000 });
+      const songs = await songloft.playlists.getSongs(favPlaylist.id, { limit: 100000, brief: true } as any);
       const isFavorited = songs.some((s: any) => s.id === songId);
       return jsonResponse({ success: true, data: { is_favorited: isFavorited, playlist_id: favPlaylist.id } });
     } catch (e: any) {
