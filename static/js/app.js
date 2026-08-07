@@ -20,7 +20,7 @@ window.currentDeviceId = '';
 
 import { updateControlState, clearResult, showSnackbar } from './utils.js';
 import { loadDevices, updateDeviceSelect, confirmDeviceSelection, updateCurrentDeviceCard, toggleDeviceSelectPanel, closeDeviceSelectPanel, selectDevice } from './device.js';
-import { loadPlaylists, loadPlaylistSongs, playPlaylist, playUrl, playTTS, highlightSongItem, togglePlaylistSelectPanel, closePlaylistSelectPanel, selectPlaylist } from './playlist.js';
+import { loadPlaylists, loadPlaylistSongs, playPlaylist, playUrl, playTTS, highlightSongItem, scrollToCurrentSong, togglePlaylistSelectPanel, closePlaylistSelectPanel, selectPlaylist } from './playlist.js';
 import {
     playModes,
     previousSong,
@@ -484,6 +484,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const stopBtn = document.getElementById('stopBtn');
     if (stopBtn) {
         stopBtn.addEventListener('click', stopPlaylist);
+    }
+
+    const locateSongBtn = document.getElementById('locateSongBtn');
+    if (locateSongBtn) {
+        locateSongBtn.addEventListener('click', scrollToCurrentSong);
     }
 
     const playModeBtn = document.getElementById('playModeBtn');

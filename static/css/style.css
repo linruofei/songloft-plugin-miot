@@ -1684,6 +1684,16 @@ html[data-theme="dark"] {
     position: static;
 }
 
+.locate-song-btn {
+    flex-shrink: 0;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+}
+.locate-song-btn .material-symbols-outlined {
+    font-size: 20px;
+}
+
 /* Song Duration */
 .song-item-duration {
     font-size: 13px;

@@ -317,10 +317,20 @@ class VirtualSongList {
         this.render();
     }
 
-    scrollToItem(originalIndex, songId) {
-        // Update active tracking
+    scrollToItem(originalIndex, songId, options) {
+        const force = !!(options && options.force);
+        const normSongId = songId || -1;
+
+        // 歌曲未变化时仅确保高亮正确，不滚动、不重建（修复 songloft-org/songloft#369）
+        if (!force &&
+            originalIndex === this.activeOriginalIndex &&
+            normSongId === this.activeSongId) {
+            this._ensureHighlight(originalIndex, normSongId);
+            return;
+        }
+
         this.activeOriginalIndex = originalIndex;
-        this.activeSongId = songId || -1;
+        this.activeSongId = normSongId;
 
         // Remove old highlights
         this.container.querySelectorAll('.song-item.active').forEach(el => el.classList.remove('active'));
@@ -355,6 +365,15 @@ class VirtualSongList {
             target = this.container.querySelector('.song-item[data-index="' + originalIndex + '"]');
         }
         if (target) target.classList.add('active');
+    }
+
+    _ensureHighlight(originalIndex, songId) {
+        const items = this.container.querySelectorAll('.song-item');
+        items.forEach(el => {
+            const matchById = songId > 0 && el.getAttribute('data-song-id') === String(songId);
+            const matchByIdx = el.getAttribute('data-index') === String(originalIndex);
+            el.classList.toggle('active', matchById || matchByIdx);
+        });
     }
 
     _clearRenderedItems() {
@@ -704,10 +723,12 @@ export function playSongAtIndex(index, songId) {
  * 高亮指定索引的歌曲项
  * @param {number} index - 歌曲索引（服务端下标，基于它自己拉取的歌单顺序）
  * @param {number} [songId] - 歌曲 ID；下标对不上时按 ID 命中真实那一行（本地列表过期时更可靠）
+ * @param {Object} [options]
+ * @param {boolean} [options.force] - 强制滚动到目标位置（用户主动触发时）
  */
-export function highlightSongItem(index, songId) {
+export function highlightSongItem(index, songId, options) {
     if (virtualSongList && virtualSongList.enabled) {
-        virtualSongList.scrollToItem(index, songId);
+        virtualSongList.scrollToItem(index, songId, options);
         return;
     }
     const songList = document.getElementById('songList');
@@ -721,6 +742,29 @@ export function highlightSongItem(index, songId) {
     }
     if (target) {
         target.classList.add('active');
+        if (options && options.force) {
+            target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        }
+    }
+}
+
+/**
+ * 滚动歌曲列表到当前播放歌曲（用户主动触发）
+ */
+export function scrollToCurrentSong() {
+    if (virtualSongList && virtualSongList.enabled) {
+        const idx = virtualSongList.activeOriginalIndex;
+        const sid = virtualSongList.activeSongId;
+        if (idx >= 0 || sid > 0) {
+            virtualSongList.scrollToItem(idx, sid, { force: true });
+        }
+        return;
+    }
+    const songList = document.getElementById('songList');
+    if (!songList) return;
+    const active = songList.querySelector('.song-item.active');
+    if (active) {
+        active.scrollIntoView({ block: 'center', behavior: 'smooth' });
     }
 }
 
