@@ -114,6 +114,9 @@ const COMMAND_PRIORITY: Record<string, number> = {
   'favorite': 5,
   'next': 6,
   'previous': 7,
+  'sleep_timer': 7,
+  'cancel_sleep_timer': 7,
+  'query_sleep_timer': 7,
   'stop': 8,
 };
 
@@ -282,9 +285,10 @@ export class VoiceEngine {
     }
 
     // 固定控制命令优先，避免 memory 或 AI 覆盖切歌、停止、音量、播放模式等操作。
+    // matchCommand 使用最长关键词匹配，能正确区分 "停止播放" vs "小时后停止播放"(sleep_timer)；
+    // matchBuiltinStopCommand 仅作兜底（用户禁用 stop 口令时仍保证能停止）。
     songloft.log.info(`[VoiceEngine] [Rule] Matching fixed control query="${query}"`);
-    const builtinStopResult = this.matchBuiltinStopCommand(query);
-    const fixedResult = builtinStopResult ?? await this.matchCommand(query, FIXED_CONTROL_COMMAND_TYPES);
+    const fixedResult = await this.matchCommand(query, FIXED_CONTROL_COMMAND_TYPES) ?? this.matchBuiltinStopCommand(query);
     if (fixedResult) {
       songloft.log.info(`[VoiceEngine] [Rule] → Matched fixed control: type=${fixedResult.command.type} keyword="${fixedResult.keyword}" argument="${fixedResult.argument}"`);
       await this.executeCommand(fixedResult, accountId, msg.device_id, query);

@@ -127,34 +127,66 @@ export class SleepTimer {
 }
 
 /**
+ * 中文数字转阿拉伯数字（覆盖语音识别常见输出）
+ */
+function chineseToNumber(text: string): string {
+  const digitMap: Record<string, string> = {
+    '零': '0', '一': '1', '二': '2', '两': '2', '三': '3', '四': '4',
+    '五': '5', '六': '6', '七': '7', '八': '8', '九': '9',
+  };
+  // "N十M" → (N*10+M), "十M" → (10+M), "N十" → (N*10)
+  let result = text;
+  result = result.replace(/([一二两三四五六七八九])十([一二三四五六七八九])/g, (_, a, b) =>
+    String(parseInt(digitMap[a]) * 10 + parseInt(digitMap[b])));
+  result = result.replace(/([一二两三四五六七八九])十/g, (_, a) =>
+    String(parseInt(digitMap[a]) * 10));
+  result = result.replace(/十([一二三四五六七八九])/g, (_, b) =>
+    String(10 + parseInt(digitMap[b])));
+  result = result.replace(/十/g, '10');
+  // 单独的个位数字
+  for (const [cn, num] of Object.entries(digitMap)) {
+    result = result.replace(new RegExp(cn, 'g'), num);
+  }
+  return result;
+}
+
+/**
  * 从语音文本中解析时间（分钟数）
  * 支持："30分钟"、"半小时"、"一个半小时"、"1.5小时"、"2小时"、"90分"
+ * 以及中文数字："三十分钟"、"两个小时"
  * @returns 分钟数，解析失败返回 0
  */
 export function parseTimeDuration(text: string): number {
-  // "一个半小时" → 90
-  if (/一个半\s*小时/.test(text)) return 90;
+  // "一个半小时" / "1个半小时" → 90
+  if (/[一1]个半\s*小时/.test(text)) return 90;
+  // "两个半小时" / "2个半小时" → 150
+  if (/[两二2]个半\s*小时/.test(text)) return 150;
   // "半小时" / "半个小时" → 30
   if (/半个?\s*小时/.test(text)) return 30;
-  // "N.N小时" → N.N * 60
-  const hourFloat = text.match(/(\d+(?:\.\d+)?)\s*小时/);
+
+  // 中文数字归一化后再做正则匹配
+  const normalized = chineseToNumber(text);
+
+  // "N个小时" / "N.N小时" → N * 60
+  const hourFloat = normalized.match(/(\d+(?:\.\d+)?)\s*(?:个\s*)?小时/);
   if (hourFloat) return Math.round(parseFloat(hourFloat[1]) * 60);
   // "N分钟" / "N分" → N
-  const min = text.match(/(\d+)\s*分(?:钟)?/);
+  const min = normalized.match(/(\d+)\s*分(?:钟)?/);
   if (min) return parseInt(min[1], 10);
   // 纯数字兜底（上下文已确认是时间类指令时）
-  const num = text.match(/(\d+)/);
+  const num = normalized.match(/(\d+)/);
   if (num) return parseInt(num[1], 10);
   return 0;
 }
 
 /**
  * 从语音文本中解析曲目数
- * 支持："3首歌"、"再听2首"、"5首"
+ * 支持："3首歌"、"再听2首"、"5首"、"三首"
  * @returns 曲目数，解析失败返回 0
  */
 export function parseSongsCount(text: string): number {
-  const m = text.match(/(\d+)\s*首/);
+  const normalized = chineseToNumber(text);
+  const m = normalized.match(/(\d+)\s*首/);
   if (m) return parseInt(m[1], 10);
   return 0;
 }
