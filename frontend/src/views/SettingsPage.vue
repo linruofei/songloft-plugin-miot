@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue';
 import AppBar from './AppBar.vue';
 import DeviceSettings from './settings/DeviceSettings.vue';
 import PlaybackSettings from './settings/PlaybackSettings.vue';
@@ -9,6 +9,7 @@ import ToolboxSettings from './settings/ToolboxSettings.vue';
 import SlIcon from '../ui/SlIcon.vue';
 import { closePage, navigation } from '../runtime';
 import { state } from '../store';
+import { openSelect } from '../ui/selectState';
 
 const isNarrow = ref(typeof window !== 'undefined' && window.innerWidth < 600);
 const categories = [
@@ -21,9 +22,23 @@ const categories = [
 const currentCategory = computed(() => categories.find((category) => category.id === (navigation.settingsCategory || 'device')) || categories[0]);
 const showMobileMenu = computed(() => isNarrow.value && !navigation.settingsCategory);
 const appbarTitle = computed(() => isNarrow.value && navigation.settingsCategory ? currentCategory.value.title : '设置');
-function setCategory(id: string) { navigation.settingsCategory = id; }
-function close() { navigation.settingsCategory = ''; closePage(); }
-function back() { if (isNarrow.value && navigation.settingsCategory) navigation.settingsCategory = ''; else close(); }
+const settingsBody = ref<HTMLElement | null>(null);
+function resetSettingsViewport(): void {
+  openSelect.value = null;
+  settingsBody.value?.scrollTo?.(0, 0);
+  if (settingsBody.value) settingsBody.value.scrollTop = 0;
+}
+function setCategory(id: string) {
+  resetSettingsViewport();
+  navigation.settingsCategory = id;
+  void nextTick(resetSettingsViewport);
+}
+function close() { resetSettingsViewport(); navigation.settingsCategory = ''; closePage(); }
+function back() {
+  resetSettingsViewport();
+  if (isNarrow.value && navigation.settingsCategory) navigation.settingsCategory = '';
+  else closePage();
+}
 function updateWidth() { isNarrow.value = window.innerWidth < 600; }
 onMounted(() => window.addEventListener('resize', updateWidth));
 onUnmounted(() => window.removeEventListener('resize', updateWidth));
@@ -36,7 +51,7 @@ onUnmounted(() => window.removeEventListener('resize', updateWidth));
         <AppBar :title="appbarTitle" back @back="back" />
       </div>
     </div>
-    <div class="settings-scroll-body">
+    <div ref="settingsBody" class="settings-scroll-body">
     <div class="settings-shell">
       <div v-if="showMobileMenu" class="settings-mobile-menu">
         <button v-for="category in categories" :key="category.id" class="settings-nav-item" @click="setCategory(category.id)"><span class="settings-nav-icon"><SlIcon :name="category.icon" :size="20" /></span><span class="settings-nav-copy"><strong class="settings-nav-title">{{ category.title }}</strong><small class="settings-nav-subtitle">{{ category.subtitle }}</small></span><SlIcon name="chevron_right" :size="20" /></button>
