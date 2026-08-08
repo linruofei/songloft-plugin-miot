@@ -16,7 +16,9 @@ import type { SelectOption, Song } from '../types';
 
 const showDevicePicker = ref(false);
 const search = ref('');
+const songRenderLimit = ref(50);
 const playlistOptions = computed<SelectOption[]>(() => state.playlists.map((p) => ({ value: String(p.id), label: p.name, description: `${p.song_count ?? 0} 首歌曲` })));
+const renderedSongs = computed(() => visibleSongs.value.slice(0, songRenderLimit.value));
 const noServerHint = computed(() => !state.config.server_host || state.config.server_host_status === 'loopback');
 const listMeasureRetries = 6;
 let listMeasureTimer: ReturnType<typeof setTimeout> | null = null;
@@ -43,6 +45,14 @@ function remeasureList(): void {
 }
 
 async function onPlaylist(value: string) { await selectPlaylist(value); }
+function resetSongRenderLimit(): void { songRenderLimit.value = 50; }
+function loadMoreSongs(event: Event): void {
+  const target = event.currentTarget as HTMLElement | null;
+  if (!target || songRenderLimit.value >= visibleSongs.value.length) return;
+  if (target.scrollTop + target.clientHeight >= target.scrollHeight - 160) {
+    songRenderLimit.value = Math.min(songRenderLimit.value + 50, visibleSongs.value.length);
+  }
+}
 function openDevicePicker() {
   openSelect.value = null;
   showDevicePicker.value = true;
@@ -52,8 +62,11 @@ async function play(song: Song, index: number) {
 }
 function notifyLocal(error: unknown) { console.warn('[miot] play failed', messageOf(error)); }
 function locateCurrentSong() {
-  document.querySelector('.song-row-current')?.scrollIntoView({ block: 'center' });
+  const currentIndex = visibleSongs.value.findIndex((song) => song.id === state.player.current_song?.id);
+  if (currentIndex >= songRenderLimit.value) songRenderLimit.value = Math.min(currentIndex + 50, visibleSongs.value.length);
+  nextTick(() => document.querySelector('.song-row-current')?.scrollIntoView({ block: 'center' }));
 }
+watch(() => [state.selectedPlaylistId, state.songSearch], resetSongRenderLimit);
 watch(
   () => [state.selectedPlaylistId, state.songsLoading, state.songsError, visibleSongs.value.length, !!currentDevice.value, noServerHint.value],
   remeasureList,
@@ -103,8 +116,8 @@ onUnmounted(() => {
       <SlButton variant="icon" icon="my_location" title="定位当前播放" @click="locateCurrentSong" />
     </div>
 
-    <SlListView v-if="state.selectedPlaylistId && !state.songsLoading && !state.songsError" aria-label="歌曲列表">
-      <SongRow v-for="(song, index) in visibleSongs" :key="song.id" :song="song" :index="index" @play="play" />
+    <SlListView v-if="state.selectedPlaylistId && !state.songsLoading && !state.songsError" aria-label="歌曲列表" @scroll="loadMoreSongs">
+      <SongRow v-for="(song, index) in renderedSongs" :key="song.id" :song="song" :index="index" @play="play" />
       <div v-if="visibleSongs.length === 0" class="song-list-empty">没有匹配的歌曲</div>
     </SlListView>
     <div v-else-if="state.songsLoading" class="song-list-empty"><span class="loading-spinner"></span><span>正在加载歌曲</span></div>

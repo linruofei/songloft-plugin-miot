@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useNativeList } from '../runtime';
 defineProps<{ ariaLabel?: string }>();
+const emit = defineEmits<{ scroll: [Event] }>();
 </script>
 
 <template>
@@ -10,8 +11,9 @@ defineProps<{ ariaLabel?: string }>();
     shrink-wrap="false"
     scroll-direction="vertical"
     :aria-label="ariaLabel"
+    @scroll="emit('scroll', $event)"
   ><slot /></webf-list-view>
-  <div v-else class="sl-list-view sl-list-view-html" :aria-label="ariaLabel">
+  <div v-else class="sl-list-view sl-list-view-html" :aria-label="ariaLabel" @scroll="emit('scroll', $event)">
     <slot />
   </div>
 </template>
