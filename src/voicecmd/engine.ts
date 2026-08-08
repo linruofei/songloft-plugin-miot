@@ -15,6 +15,7 @@ import { AIAnalyzer } from './ai_analyzer';
 import { OnlineSearcher } from './online_searcher';
 import { updateDeviceStatusCache } from '../handlers/playlist';
 import { callHostAPI, getHostAPIBaseUrl } from '../utils/http';
+import { findFavoritesPlaylist } from '../utils/favorites';
 import { MemoryService } from '../memory';
 import { SleepTimer, parseTimeDuration, parseSongsCount, detectSleepTimerMode, formatRemaining } from '../sleep_timer';
 import type { PlaylistManager } from '../player/manager';
@@ -260,6 +261,21 @@ export class VoiceEngine {
       return true;
     }
     return false;
+  }
+
+  /** 设置指定设备的 sleep timer，供播放器界面调用。 */
+  setSleepTimer(
+    accountId: string,
+    deviceId: string,
+    mode: 'time' | 'songs',
+    value: number,
+  ): { active: boolean; mode: string; remaining: number; total: number } {
+    const max = mode === 'time' ? 999 : 99;
+    if (!Number.isInteger(value) || value < 1 || value > max) {
+      throw new Error(`value must be an integer between 1 and ${max}`);
+    }
+    this.setupSleepTimer(accountId, deviceId, mode, value);
+    return this.getSleepTimerState(accountId, deviceId);
   }
 
   /**
@@ -1646,11 +1662,16 @@ export class VoiceEngine {
       '随机播放': 'random',
       '单曲循环': 'single',
       '单曲': 'single',
+      '单曲播放': 'singlePlay',
+      '只播放这首': 'singlePlay',
+      '播完这首停止': 'singlePlay',
       '列表循环': 'loop',
       '循环': 'loop',
       'order': 'order',
       'random': 'random',
       'single': 'single',
+      'singlePlay': 'singlePlay',
+      'single_play': 'singlePlay',
       'loop': 'loop',
     };
 
@@ -1767,9 +1788,8 @@ export class VoiceEngine {
     }
 
     try {
-      // 查找内置收藏歌单（name="收藏", type="normal"）
       const playlists = await songloft.playlists.list();
-      const favPlaylist = playlists.find(p => p.name === '收藏' && p.type === 'normal');
+      const favPlaylist = findFavoritesPlaylist(playlists);
       if (!favPlaylist) {
         songloft.log.warn('[VoiceEngine] Favorite: built-in favorites playlist not found');
         await this.minaService.textToSpeech(accountId, deviceId, '未找到收藏歌单');
@@ -1778,11 +1798,11 @@ export class VoiceEngine {
 
       const songTitle = song.title || '未知歌曲';
       if (action === 'remove') {
-        await callHostAPI('DELETE', `/api/v1/playlists/${favPlaylist.id}/songs/${song.id}`);
+        await songloft.playlists.removeSongs(favPlaylist.id, [song.id]);
         songloft.log.info(`[VoiceEngine] Unfavorited: ${songTitle} (id=${song.id})`);
         await this.minaService.textToSpeech(accountId, deviceId, `已取消收藏${songTitle}`);
       } else {
-        await callHostAPI('POST', `/api/v1/playlists/${favPlaylist.id}/songs`, { song_ids: [song.id] });
+        await songloft.playlists.addSongs(favPlaylist.id, [song.id]);
         songloft.log.info(`[VoiceEngine] Favorited: ${songTitle} (id=${song.id})`);
         await this.minaService.textToSpeech(accountId, deviceId, `已收藏${songTitle}`);
       }
@@ -2022,12 +2042,13 @@ export class VoiceEngine {
    */
   private setupSleepTimer(accountId: string, deviceId: string, mode: 'time' | 'songs', value: number): void {
     const timer = this.getOrCreateSleepTimer(accountId, deviceId);
+    const pm = this.playlistManagerMap.get(accountId, deviceId);
+    if (pm) pm.setOnAdvanceHook(undefined);
 
     if (mode === 'time') {
       timer.setTime(value);
     } else {
       timer.setSongs(value);
-      const pm = this.playlistManagerMap.get(accountId, deviceId);
       if (pm) {
         pm.setOnAdvanceHook(() => timer.onSongAdvanced());
       }

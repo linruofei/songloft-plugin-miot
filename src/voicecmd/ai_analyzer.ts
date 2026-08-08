@@ -12,7 +12,7 @@ const AI_SYSTEM_PROMPT = `从指令中提取出操作和音乐信息，返回JSO
 - play_song: name(歌曲名), artist(歌手名)
 - play_artist: artist(歌手名)
 - play_playlist: playlist(歌单名)
-- set_play_mode: mode=order|random|single|loop(播放模式)
+- set_play_mode: mode=order|random|single|loop|singlePlay(播放模式，singlePlay 表示当前歌曲播完停止)
 - favorite: action=add|remove(收藏/取消收藏当前歌曲)
 - sleep_timer: duration(分钟数,整数)或songs_count(曲目数,整数)，两者只填一个。定时停止播放。
 - cancel_sleep_timer: 取消定时停止

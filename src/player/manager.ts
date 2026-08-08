@@ -21,6 +21,29 @@ export function isTempPlaylistId(id: number): boolean {
   return id < 0;
 }
 
+/** 统一播放模式，并兼容旧版 Web 前端曾写入的别名。 */
+export function normalizePlayMode(mode: unknown, fallback: PlayMode = 'order'): PlayMode {
+  switch (String(mode || '')) {
+    case 'order':
+      return 'order';
+    case 'loop':
+      return 'loop';
+    case 'single':
+    case 'repeat_one':
+      return 'single';
+    case 'singlePlay':
+    case 'single_play':
+    case 'single-play':
+    case 'single-once':
+      return 'singlePlay';
+    case 'random':
+    case 'shuffle':
+      return 'random';
+    default:
+      return fallback;
+  }
+}
+
 // ===== 歌曲类型 =====
 
 /** 歌曲信息（从宿主API返回） */
@@ -160,7 +183,7 @@ export class PlaylistManager {
       this.currentIndex = (startIndex !== undefined && startIndex >= 0 && startIndex < this.songs.length)
         ? startIndex : 0;
     }
-    this.playMode = mode || 'order';
+    this.playMode = normalizePlayMode(mode);
     this.randomPlayed = new Set();
     this.clearPendingNextIndex();
 
@@ -222,7 +245,7 @@ export class PlaylistManager {
     this.tempArtistQuery = '';
     this.pendingTempArtist = '';
     this.currentIndex = startIndex;
-    this.playMode = mode || 'order';
+    this.playMode = normalizePlayMode(mode);
     this.randomPlayed = new Set();
     this.clearPendingNextIndex();
 
@@ -261,7 +284,7 @@ export class PlaylistManager {
     this.tempPlaylistName = label || '';
     this.tempArtistQuery = artistQuery !== undefined ? artistQuery : this.tempArtistQuery;
     this.currentIndex = (startIndex >= 0 && startIndex < songs.length) ? startIndex : 0;
-    this.playMode = mode;
+    this.playMode = normalizePlayMode(mode);
     this.randomPlayed = new Set();
     this.clearPendingNextIndex();
 
@@ -354,8 +377,11 @@ export class PlaylistManager {
       return false;
     }
 
-    // 用已定好的那首：随机模式下它已经被 prefetchNextSong 预热过，手动切歌也能秒开
-    const nextIdx = this.reserveNextIndex();
+    // 单曲播放只限制自然播完后的推进，手动下一首仍按队列顺序切换。
+    // 其它模式用已定好的那首：随机模式下它已经被 prefetchNextSong 预热过。
+    const nextIdx = this.playMode === 'singlePlay'
+      ? (this.currentIndex < this.songs.length - 1 ? this.currentIndex + 1 : -1)
+      : this.reserveNextIndex();
     if (nextIdx < 0) {
       songloft.log.info('[PlaylistManager] No next song, stopping');
       await this.stop();
@@ -399,25 +425,26 @@ export class PlaylistManager {
    * 设置播放模式
    */
   async setPlayMode(mode: PlayMode): Promise<void> {
-    this.playMode = mode;
+    const normalizedMode = normalizePlayMode(mode);
+    this.playMode = normalizedMode;
     // 已定好的下一首是按旧模式算的，换模式后必须作废重算（如 order → random）
     this.clearPendingNextIndex();
 
     // 切换到随机模式时重置已播放记录
-    if (mode === 'random') {
+    if (normalizedMode === 'random') {
       this.randomPlayed = new Set();
     }
 
     // 持久化到设备配置
     try {
       await this.configManager.updateDevice(this.accountId, this.deviceId, {
-        play_mode: mode,
+        play_mode: normalizedMode,
       });
     } catch (e) {
       songloft.log.warn('[PlaylistManager] Failed to save play mode: ' + String(e));
     }
 
-    songloft.log.info('[PlaylistManager] Play mode set to ' + mode);
+    songloft.log.info('[PlaylistManager] Play mode set to ' + normalizedMode);
   }
 
   /**
@@ -734,7 +761,7 @@ export class PlaylistManager {
     this.songs = songs;
     this.totalSongs = songs.length;
     this.currentIndex = (startIndex >= 0 && startIndex < songs.length) ? startIndex : 0;
-    this.playMode = playMode;
+    this.playMode = normalizePlayMode(playMode);
     this.playlistId = playlistId;
     this.state = 'idle';
     this.randomPlayed = new Set();
@@ -748,7 +775,7 @@ export class PlaylistManager {
     this.songs = songs;
     this.totalSongs = songs.length;
     this.currentIndex = 0;
-    this.playMode = playMode;
+    this.playMode = normalizePlayMode(playMode);
     this.playlistId = this.tempId;
     this.tempPlaylistName = '歌手: ' + artistName;
     this.tempArtistQuery = artistName;
@@ -995,6 +1022,10 @@ export class PlaylistManager {
         // 单曲循环：一直播放当前歌曲
         return this.currentIndex;
 
+      case 'singlePlay':
+        // 单曲播放：自然播完不预热、不自动切到下一首。
+        return -1;
+
       case 'random':
         // 随机播放：避免重复直到全部播完
         this.randomPlayed.add(this.currentIndex);
@@ -1049,6 +1080,13 @@ export class PlaylistManager {
       case 'single':
         // 单曲循环：重复当前
         return this.currentIndex;
+
+      case 'singlePlay':
+        // 单曲播放不限制手动上一首，行为与顺序播放一致。
+        if (this.currentIndex > 0) {
+          return this.currentIndex - 1;
+        }
+        return -1;
 
       case 'random':
         // 随机模式：简单返回前一首
@@ -1125,6 +1163,20 @@ export class PlaylistManager {
       callHostAPI('POST', `/api/v1/songs/${finishedSong.id}/played?source=miot`, undefined, { timeoutMs: 3000 }).catch(e => {
         songloft.log.warn('[PlaylistManager] songPlayed notify failed: ' + String(e));
       });
+    }
+
+    if (this.playMode === 'singlePlay') {
+      // 与主程序一致：自然播放结束后停在当前歌曲，不循环也不推进。
+      // 标记为 hardStopped，使用户再次点击播放时直接从头重推 URL，避免对已结束的
+      // 设备媒体上下文发送 resume 后出现无声播放。
+      this.clearPendingNextIndex();
+      this.state = 'paused';
+      this.playStartTimeMs = 0;
+      this.pausedPositionSec = 0;
+      this.streamSeekOffsetSec = 0;
+      this.hardStopped = true;
+      songloft.log.info('[PlaylistManager] Single-play completed, pausing on current song');
+      return;
     }
 
     // 必须是 prefetchNextSong 预热过的那首（reserveNextIndex 已把两者锁到同一首），
@@ -1444,7 +1496,7 @@ export class PlaylistManagerMap {
 
       if (songs.length > 0) {
         const startIndex = devCfg.current_song_index || 0;
-        const playMode = (devCfg.play_mode || 'order') as PlayMode;
+        const playMode = normalizePlayMode(devCfg.play_mode);
         manager.initWithSongs(songs, startIndex, playMode, devCfg.playlist_id);
         songloft.log.info(`[PlaylistManagerMap] Restored playlist from config playlistId=${devCfg.playlist_id} index=${startIndex} mode=${playMode}`);
       }
@@ -1514,7 +1566,7 @@ export class PlaylistManagerMap {
       const p = manager.getPrimary();
       const devices = await this.configManager.getDevices(p.account_id);
       const devCfg = devices.find(d => d.device_id === p.device_id);
-      return (devCfg?.play_mode || 'random') as PlayMode;
+      return normalizePlayMode(devCfg?.play_mode, 'random');
     } catch {
       return 'random';
     }

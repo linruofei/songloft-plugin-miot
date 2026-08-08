@@ -1,0 +1,656 @@
+import { computed, reactive } from 'vue';
+import { del, get, messageOf, pluginWebSocketUrl, post, query } from './api';
+import type {
+  Account,
+  AccountDevices,
+  ConversationMessage,
+  Device,
+  DeviceGroup,
+  IndexStatus,
+  MemoryEntity,
+  MemoryStats,
+  MiotConfig,
+  PlayerStatus,
+  Playlist,
+  PlayMode,
+  ScheduleLog,
+  ScheduledTask,
+  SearchProvider,
+  Song,
+  VoiceCommand,
+  Webhook,
+} from './types';
+
+const defaultConfig: MiotConfig = {
+  server_host: '',
+  server_host_status: 'empty',
+  suggested_addresses: [],
+  conversation_monitor_enabled: false,
+  conversation_poll_interval: 1,
+  conversation_poll_debug: false,
+  voice_command_enabled: false,
+  voice_memory_enabled: true,
+  voice_memory_max_records: 100,
+  scheduled_tasks_enabled: false,
+  timezone: 'Asia/Shanghai',
+  force_mp3: false,
+  radio_force_mp3: false,
+  volume_normalize: false,
+  song_transition_offset: 0,
+  max_song_index: 10000,
+  external_search_enabled: false,
+  external_search_url: '',
+  external_search_token: '',
+  external_search_sources: [],
+  external_search_playlist_id: '',
+  external_search_timeout: 6,
+  external_search_no_import: false,
+  search_priority: 'parallel',
+  extra_music_api_models: [],
+  indicator_light_enabled: false,
+  interrupt_tts_hint_enabled: false,
+  interrupt_tts_hint_text: '正在搜索，请稍候',
+  play_announcement_enabled: false,
+  play_announcement_template: '即将播放{artist}的{song}',
+  play_announcement_wait_mode: 'auto',
+  play_announcement_delay: 3,
+  smart_resume_timeout: 30,
+  default_cover_id: '',
+  touchscreen_lyrics_enabled: false,
+  ai_config: {},
+};
+
+export interface SnackbarState {
+  text: string;
+  kind: 'info' | 'success' | 'warning' | 'error';
+  token: number;
+}
+
+export interface ConfirmState {
+  open: boolean;
+  title: string;
+  message: string;
+  confirmText: string;
+  dangerous: boolean;
+  resolve?: (value: boolean) => void;
+}
+
+export const state = reactive({
+  initialized: false,
+  loading: true,
+  startupError: '',
+  refreshing: false,
+  config: { ...defaultConfig } as MiotConfig,
+  configLoaded: false,
+  configSaving: false,
+  accounts: [] as Account[],
+  devices: [] as AccountDevices[],
+  groups: [] as DeviceGroup[],
+  currentAccountId: '',
+  currentDeviceId: '',
+  playlists: [] as Playlist[],
+  selectedPlaylistId: '',
+  songs: [] as Song[],
+  songsLoading: false,
+  songsError: '',
+  songSearch: '',
+  player: {} as PlayerStatus,
+  playerBusy: false,
+  statusConnected: false,
+  schedules: [] as ScheduledTask[],
+  scheduleLogs: [] as ScheduleLog[],
+  voiceCommands: [] as VoiceCommand[],
+  conversationMessages: [] as ConversationMessage[],
+  conversationStatus: null as Record<string, unknown> | null,
+  webhooks: [] as Webhook[],
+  indexStatus: {} as IndexStatus,
+  memoryStats: {} as MemoryStats,
+  memoryEntities: [] as MemoryEntity[],
+  memoryUnclassified: [] as Array<Record<string, unknown>>,
+  memoryAmbiguous: [] as Array<Record<string, unknown>>,
+  searchProviders: [] as SearchProvider[],
+  snackbar: null as SnackbarState | null,
+  confirm: {
+    open: false,
+    title: '',
+    message: '',
+    confirmText: '确定',
+    dangerous: false,
+  } as ConfirmState,
+  operationLog: [] as Array<{ time: string; message: string; success: boolean }>,
+});
+
+export function deviceId(device: Device): string {
+  return String(device.device_id || device.deviceID || device.id || '');
+}
+
+export function deviceName(device: Device): string {
+  return device.name || device.alias || '未命名设备';
+}
+
+export const currentDevice = computed(() => {
+  const account = state.devices.find((item) => item.account_id === state.currentAccountId);
+  return account?.devices.find((device) => deviceId(device) === state.currentDeviceId) || null;
+});
+
+export const managedDevices = computed(() =>
+  state.devices.flatMap((account) =>
+    account.devices
+      .filter((device) => device.managed)
+      .map((device) => ({
+        accountId: account.account_id,
+        accountName: account.account_name || account.account_id,
+        device,
+      })),
+  ),
+);
+
+export const visibleSongs = computed(() => {
+  const keyword = state.songSearch.trim().toLocaleLowerCase('zh-CN');
+  if (!keyword) return state.songs;
+  return state.songs.filter((song) =>
+    [song.title, song.artist, song.album]
+      .filter(Boolean)
+      .some((value) => String(value).toLocaleLowerCase('zh-CN').includes(keyword)),
+  );
+});
+
+let snackbarTimer: ReturnType<typeof setTimeout> | null = null;
+let snackbarToken = 0;
+export function notify(
+  text: string,
+  kind: SnackbarState['kind'] = 'info',
+  duration = 3200,
+): void {
+  snackbarToken += 1;
+  const token = snackbarToken;
+  state.snackbar = { text, kind, token };
+  if (snackbarTimer) clearTimeout(snackbarTimer);
+  snackbarTimer = setTimeout(() => {
+    if (state.snackbar?.token === token) state.snackbar = null;
+  }, duration);
+}
+
+export function addOperation(message: string, success: boolean): void {
+  state.operationLog.unshift({ time: new Date().toLocaleTimeString(), message, success });
+  state.operationLog.splice(30);
+}
+
+export function confirmAction(
+  title: string,
+  message: string,
+  confirmText = '确定',
+  dangerous = false,
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    state.confirm = { open: true, title, message, confirmText, dangerous, resolve };
+  });
+}
+
+export function resolveConfirm(value: boolean): void {
+  state.confirm.resolve?.(value);
+  state.confirm.open = false;
+  state.confirm.resolve = undefined;
+}
+
+export async function loadConfig(): Promise<void> {
+  const config = await get<MiotConfig>('/config');
+  Object.assign(state.config, defaultConfig, config);
+  state.config.external_search_sources = [...(config.external_search_sources || [])];
+  state.config.extra_music_api_models = [...(config.extra_music_api_models || [])];
+  state.config.ai_config = { ...(config.ai_config || {}) };
+  state.configLoaded = true;
+}
+
+let savedConfig = '';
+let pendingConfigPatch: Partial<MiotConfig> | null = null;
+let configSavePromise: Promise<void> | null = null;
+function configFingerprint(): string {
+  return JSON.stringify(state.config);
+}
+
+export async function saveConfig(patch: Partial<MiotConfig>): Promise<void> {
+  Object.assign(state.config, patch);
+  const fingerprint = configFingerprint();
+  if (fingerprint === savedConfig && !configSavePromise) return;
+  pendingConfigPatch = { ...(pendingConfigPatch || {}), ...patch };
+  if (configSavePromise) return configSavePromise;
+
+  state.configSaving = true;
+  configSavePromise = (async () => {
+    try {
+      while (pendingConfigPatch) {
+        const nextPatch = pendingConfigPatch;
+        pendingConfigPatch = null;
+        await post('/config', nextPatch);
+        savedConfig = configFingerprint();
+      }
+      notify('设置已保存', 'success');
+    } catch (error) {
+      pendingConfigPatch = null;
+      notify(messageOf(error), 'error');
+      throw error;
+    } finally {
+      state.configSaving = false;
+      configSavePromise = null;
+    }
+  })();
+  return configSavePromise;
+}
+
+export async function loadAccountsAndDevices(): Promise<void> {
+  const [accounts, devices] = await Promise.all([
+    get<Account[]>('/auth/status'),
+    get<AccountDevices[]>('/mina/devices'),
+  ]);
+  state.accounts = accounts || [];
+  state.devices = devices || [];
+  ensureCurrentDevice();
+}
+
+function ensureCurrentDevice(): void {
+  const currentExists = state.devices.some(
+    (account) =>
+      account.account_id === state.currentAccountId &&
+      account.devices.some((device) => deviceId(device) === state.currentDeviceId),
+  );
+  if (currentExists) return;
+  for (const account of state.devices) {
+    const selected =
+      account.devices.find((device) => deviceId(device) === account.last_selected_device_id) ||
+      account.devices.find((device) => device.managed) ||
+      account.devices[0];
+    if (selected) {
+      state.currentAccountId = account.account_id;
+      state.currentDeviceId = deviceId(selected);
+      return;
+    }
+  }
+  state.currentAccountId = '';
+  state.currentDeviceId = '';
+}
+
+let selectionRevision = 0;
+export async function selectDevice(accountId: string, selectedDeviceId: string): Promise<void> {
+  selectionRevision += 1;
+  const revision = selectionRevision;
+  state.currentAccountId = accountId;
+  state.currentDeviceId = selectedDeviceId;
+  state.player = {};
+  connectStatusStream();
+  try {
+    await post('/mina/last_selection', { account_id: accountId, device_id: selectedDeviceId });
+    if (revision === selectionRevision) await refreshPlayerStatus();
+  } catch (error) {
+    if (revision === selectionRevision) notify(messageOf(error), 'error');
+  }
+}
+
+export async function toggleManaged(accountId: string, selectedDeviceId: string, managed: boolean) {
+  await post('/mina/device/managed', {
+    account_id: accountId,
+    device_id: selectedDeviceId,
+    managed,
+  });
+  const account = state.devices.find((item) => item.account_id === accountId);
+  const device = account?.devices.find((item) => deviceId(item) === selectedDeviceId);
+  if (device) device.managed = managed;
+  notify(managed ? '已启用设备管理' : '已停用设备管理', 'success');
+}
+
+export async function loadPlaylists(): Promise<void> {
+  state.playlists = (await get<Playlist[]>('/playlists')) || [];
+  if (
+    state.selectedPlaylistId &&
+    !state.playlists.some((playlist) => String(playlist.id) === state.selectedPlaylistId)
+  ) {
+    state.selectedPlaylistId = '';
+    state.songs = [];
+  }
+}
+
+let songRequest = 0;
+export async function selectPlaylist(playlistId: string): Promise<void> {
+  state.selectedPlaylistId = playlistId;
+  state.songSearch = '';
+  state.songs = [];
+  state.songsError = '';
+  if (!playlistId) return;
+  songRequest += 1;
+  const request = songRequest;
+  state.songsLoading = true;
+  try {
+    const songs = await get<Song[]>(`/playlists/${encodeURIComponent(playlistId)}/songs`);
+    if (request === songRequest) state.songs = songs || [];
+  } catch (error) {
+    if (request === songRequest) state.songsError = messageOf(error);
+  } finally {
+    if (request === songRequest) state.songsLoading = false;
+  }
+}
+
+async function selectCurrentPlaylistOnEntry(): Promise<void> {
+  if (state.selectedPlaylistId || !state.player.current_song) return;
+
+  const statusPlaylistId = state.player.playlist_id;
+  const matchedById = statusPlaylistId === undefined
+    ? undefined
+    : state.playlists.find((playlist) => String(playlist.id) === String(statusPlaylistId));
+  const matched = matchedById || (
+    state.player.playlist_name
+      ? state.playlists.find((playlist) => playlist.name === state.player.playlist_name)
+      : undefined
+  );
+  if (matched) await selectPlaylist(String(matched.id));
+}
+
+function targetBody() {
+  if (!state.currentAccountId || !state.currentDeviceId) {
+    throw new Error('请先选择播放设备');
+  }
+  return { account_id: state.currentAccountId, device_id: state.currentDeviceId };
+}
+
+export async function playSong(song: Song, visibleIndex?: number): Promise<void> {
+  if (!state.selectedPlaylistId) throw new Error('请先选择歌单');
+  const fallbackIndex = state.songs.findIndex((item) => item.id === song.id);
+  await playerCommand('/player/play', {
+    ...targetBody(),
+    playlist_id: Number(state.selectedPlaylistId),
+    song_id: song.id,
+    start_index: fallbackIndex >= 0 ? fallbackIndex : visibleIndex || 0,
+    play_mode: state.player.play_mode || 'order',
+  });
+}
+
+export async function playerCommand(path: string, body: Record<string, unknown> = {}): Promise<void> {
+  if (state.playerBusy) return;
+  state.playerBusy = true;
+  try {
+    await post(path, { ...targetBody(), ...body });
+    requestStatusRefresh();
+    await refreshPlayerStatus();
+  } catch (error) {
+    const message = messageOf(error);
+    addOperation(message, false);
+    notify(message, 'error');
+    throw error;
+  } finally {
+    state.playerBusy = false;
+  }
+}
+
+export async function setPlayMode(mode: PlayMode): Promise<void> {
+  await playerCommand('/player/mode', { play_mode: mode });
+}
+
+export async function seekPlayer(position: number): Promise<void> {
+  const duration = Number(state.player.duration || 0);
+  if (duration <= 0) return;
+  const normalized = Math.max(0, Math.min(Math.max(0, duration - 3), Math.round(position)));
+  state.player.position = normalized;
+  await playerCommand('/player/seek', { position: normalized });
+}
+
+export async function setVolume(volume: number): Promise<void> {
+  const normalized = Math.max(0, Math.min(100, Math.round(volume)));
+  state.player.volume = normalized;
+  await playerCommand('/mina/volume', { volume: normalized });
+}
+
+export async function refreshPlayerStatus(): Promise<void> {
+  if (!state.currentAccountId || !state.currentDeviceId) return;
+  try {
+    state.player = await get<PlayerStatus>(
+      `/player/status${query({
+        account_id: state.currentAccountId,
+        device_id: state.currentDeviceId,
+      })}`,
+    );
+  } catch (error) {
+    if (!state.statusConnected) console.warn('[miot] status refresh failed', messageOf(error));
+  }
+}
+
+let statusSocket: WebSocket | null = null;
+let statusReconnect: ReturnType<typeof setTimeout> | null = null;
+let statusPoll: ReturnType<typeof setInterval> | null = null;
+let statusAttempts = 0;
+let statusManualClose = false;
+
+function startStatusPolling() {
+  if (statusPoll) return;
+  void refreshPlayerStatus();
+  statusPoll = setInterval(() => void refreshPlayerStatus(), 1500);
+}
+
+function scheduleStatusReconnect() {
+  if (statusManualClose || statusReconnect) return;
+  const delay = Math.min(1000 * 2 ** statusAttempts, 15000);
+  statusAttempts += 1;
+  statusReconnect = setTimeout(() => {
+    statusReconnect = null;
+    openStatusSocket();
+  }, delay);
+}
+
+function openStatusSocket() {
+  if (!state.currentAccountId || !state.currentDeviceId || typeof WebSocket === 'undefined') {
+    startStatusPolling();
+    return;
+  }
+  try {
+    statusSocket = new WebSocket(
+      pluginWebSocketUrl(
+        `/status/ws${query({
+          account_id: state.currentAccountId,
+          device_id: state.currentDeviceId,
+        })}`,
+      ),
+    );
+    statusSocket.onopen = () => {
+      state.statusConnected = true;
+      statusAttempts = 0;
+      if (statusPoll) clearInterval(statusPoll);
+      statusPoll = null;
+    };
+    statusSocket.onmessage = (event) => {
+      try {
+        const frame = JSON.parse(String(event.data));
+        if (frame?.type === 'status' && frame.data) state.player = frame.data;
+      } catch {
+        // Ignore malformed frames; the next valid status replaces them.
+      }
+    };
+    statusSocket.onerror = () => statusSocket?.close();
+    statusSocket.onclose = () => {
+      statusSocket = null;
+      state.statusConnected = false;
+      if (!statusManualClose) {
+        startStatusPolling();
+        scheduleStatusReconnect();
+      }
+    };
+  } catch {
+    startStatusPolling();
+    scheduleStatusReconnect();
+  }
+}
+
+export function connectStatusStream(): void {
+  disconnectStatusStream();
+  statusManualClose = false;
+  statusAttempts = 0;
+  openStatusSocket();
+}
+
+export function requestStatusRefresh(): void {
+  if (statusSocket?.readyState === WebSocket.OPEN) {
+    statusSocket.send(JSON.stringify({ type: 'refresh' }));
+  }
+}
+
+export function disconnectStatusStream(): void {
+  statusManualClose = true;
+  if (statusReconnect) clearTimeout(statusReconnect);
+  if (statusPoll) clearInterval(statusPoll);
+  statusReconnect = null;
+  statusPoll = null;
+  statusSocket?.close();
+  statusSocket = null;
+  state.statusConnected = false;
+}
+
+export async function loadGroups(): Promise<void> {
+  state.groups = (await get<DeviceGroup[]>('/groups')) || [];
+}
+
+export async function saveGroup(group: Pick<DeviceGroup, 'name' | 'members'> & { id?: string }) {
+  if (group.id) await post('/groups/update', group);
+  else await post('/groups', group);
+  await loadGroups();
+  notify('设备分组已保存', 'success');
+}
+
+export async function deleteGroup(id: string) {
+  await del(`/groups${query({ id })}`);
+  await loadGroups();
+  notify('设备分组已删除', 'success');
+}
+
+export async function loadSchedules(): Promise<void> {
+  const result = await get<{ enabled: boolean; tasks: ScheduledTask[] }>('/schedules');
+  state.schedules = result.tasks || [];
+  state.config.scheduled_tasks_enabled = !!result.enabled;
+}
+
+export async function saveSchedule(task: ScheduledTask): Promise<void> {
+  if (task.id) await post('/schedules/update', task);
+  else await post('/schedules', task);
+  await loadSchedules();
+  notify('定时任务已保存', 'success');
+}
+
+export async function toggleSchedule(task: ScheduledTask, enabled: boolean): Promise<void> {
+  await post('/schedules/toggle', { id: task.id, enabled });
+  task.enabled = enabled;
+}
+
+export async function deleteSchedule(id: string): Promise<void> {
+  await del(`/schedules${query({ id })}`);
+  await loadSchedules();
+}
+
+export async function loadScheduleLogs(): Promise<void> {
+  const result = await get<{ logs: ScheduleLog[] }>('/schedules/logs?limit=50');
+  state.scheduleLogs = result.logs || [];
+}
+
+export async function loadVoiceData(): Promise<void> {
+  const [commands, conversation, webhooks, index] = await Promise.all([
+    get<{ enabled: boolean; commands: VoiceCommand[] }>('/voice-commands'),
+    get<Record<string, unknown>>('/conversation/status').catch(() => null),
+    get<Webhook[]>('/conversation/webhooks').catch(() => []),
+    get<IndexStatus>('/indexing/status').catch(() => ({})),
+  ]);
+  state.voiceCommands = commands.commands || [];
+  state.config.voice_command_enabled = !!commands.enabled;
+  state.conversationStatus = conversation;
+  state.webhooks = webhooks;
+  state.indexStatus = index;
+}
+
+export async function saveVoiceCommands(commands = state.voiceCommands): Promise<void> {
+  await post('/voice-commands', { commands });
+  state.voiceCommands = commands;
+  notify('语音口令已保存', 'success');
+}
+
+export async function loadConversationMessages(): Promise<void> {
+  state.conversationMessages =
+    (await get<ConversationMessage[]>('/conversation/messages?limit=50')) || [];
+}
+
+export async function addWebhook(name: string, url: string): Promise<void> {
+  await post('/conversation/webhooks', { name, url });
+  state.webhooks = await get<Webhook[]>('/conversation/webhooks');
+}
+
+export async function deleteWebhook(id: string): Promise<void> {
+  await del(`/conversation/webhooks${query({ id })}`);
+  state.webhooks = await get<Webhook[]>('/conversation/webhooks');
+}
+
+export async function refreshIndex(): Promise<void> {
+  await post('/indexing/refresh');
+  notify('索引刷新已开始', 'success');
+  setTimeout(async () => {
+    state.indexStatus = await get<IndexStatus>('/indexing/status').catch(() => state.indexStatus);
+  }, 1500);
+}
+
+export async function loadMemory(): Promise<void> {
+  const [stats, entities, ambiguous] = await Promise.all([
+    get<MemoryStats>('/memory/stats'),
+    get<{ stats: MemoryStats; entities: MemoryEntity[]; unclassified: Array<Record<string, unknown>> }>(
+      '/memory/entities',
+    ),
+    get<{ records: Array<Record<string, unknown>> }>('/memory/ambiguous'),
+  ]);
+  state.memoryStats = stats;
+  state.memoryEntities = entities.entities || [];
+  state.memoryUnclassified = entities.unclassified || [];
+  state.memoryAmbiguous = ambiguous.records || [];
+}
+
+export async function clearMemory(): Promise<void> {
+  await del('/memory/all');
+  await loadMemory();
+  notify('语音记忆已清空', 'success');
+}
+
+export async function loadSearchProviders(): Promise<void> {
+  const result = await get<SearchProvider[] | { providers?: SearchProvider[] }>('/search-providers').catch(() => []);
+  state.searchProviders = Array.isArray(result) ? result : result.providers || [];
+}
+
+export async function refreshAll(): Promise<void> {
+  if (state.refreshing) return;
+  state.refreshing = true;
+  try {
+    await Promise.all([loadConfig(), loadAccountsAndDevices(), loadPlaylists(), loadGroups()]);
+    savedConfig = configFingerprint();
+    connectStatusStream();
+    await refreshPlayerStatus();
+    notify('内容已刷新', 'success');
+  } catch (error) {
+    notify(messageOf(error), 'error');
+  } finally {
+    state.refreshing = false;
+  }
+}
+
+export async function initialize(): Promise<void> {
+  state.loading = true;
+  state.startupError = '';
+  try {
+    await Promise.all([loadConfig(), loadAccountsAndDevices(), loadPlaylists(), loadGroups()]);
+    savedConfig = configFingerprint();
+    connectStatusStream();
+    await refreshPlayerStatus();
+    await selectCurrentPlaylistOnEntry();
+    state.initialized = true;
+  } catch (error) {
+    state.startupError = messageOf(error);
+  } finally {
+    state.loading = false;
+  }
+}
+
+export function disposeStore(): void {
+  disconnectStatusStream();
+  if (snackbarTimer) clearTimeout(snackbarTimer);
+  state.confirm.resolve?.(false);
+}
+
+export { messageOf };

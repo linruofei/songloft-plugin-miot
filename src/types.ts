@@ -34,7 +34,7 @@ export interface DeviceConfig {
   alias: string;
   managed: boolean;
   volume: number;
-  play_mode: string;         // "order" | "random" | "single" | "loop"
+  play_mode: string;         // "order" | "random" | "single" | "loop" | "singlePlay"
   playlist_id: number;
   current_song_index: number;
   last_selected_at: string;
@@ -318,7 +318,7 @@ export interface ConversationMessage {
 export type PlayState = 'idle' | 'playing' | 'paused' | 'stopped';
 
 /** 播放模式枚举 */
-export type PlayMode = 'order' | 'random' | 'single' | 'loop';
+export type PlayMode = 'order' | 'random' | 'single' | 'loop' | 'singlePlay';
 
 /** 播放器状态 */
 export interface PlayerStatus {

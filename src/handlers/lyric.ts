@@ -23,7 +23,7 @@ interface HostLyricPayload {
 /**
  * 注册歌词代理路由
  * GET /lyric?song_id=123 → 代理主程序 /api/v1/songs/{id}/lyric
- * 返回 { success: true, lyric, tlyric, rlyric, lxlyric }；无歌词/失败时 lyric 为空。
+ * 返回统一 data envelope；无歌词/失败时 lyric 为空。
  */
 export function registerLyricHandlers(router: Router): void {
   router.get('/lyric', async (req: HTTPRequest) => {
@@ -42,10 +42,12 @@ export function registerLyricHandlers(router: Router): void {
       );
       return jsonResponse({
         success: true,
-        lyric: payload?.lyric || '',
-        tlyric: payload?.tlyric || '',
-        rlyric: payload?.rlyric || '',
-        lxlyric: payload?.lxlyric || '',
+        data: {
+          lyric: payload?.lyric || '',
+          tlyric: payload?.tlyric || '',
+          rlyric: payload?.rlyric || '',
+          lxlyric: payload?.lxlyric || '',
+        },
       });
     } catch (e: any) {
       // 404 表示该歌曲无歌词（主程序设计如此），静默归一化为空歌词。
@@ -54,7 +56,10 @@ export function registerLyricHandlers(router: Router): void {
       if (!/\b404\b/.test(msg)) {
         songloft.log.warn('[lyric] fetch lyric failed song_id=' + songId + ': ' + msg);
       }
-      return jsonResponse({ success: true, lyric: '', tlyric: '', rlyric: '', lxlyric: '' });
+      return jsonResponse({
+        success: true,
+        data: { lyric: '', tlyric: '', rlyric: '', lxlyric: '' },
+      });
     }
   });
 }

@@ -44,7 +44,7 @@ const AMBIGUITY_FLUSH_DELAY_MS = 2000;
 const BLOCKED_MANUAL_ALIASES = new Set([
   '歌', '音乐', '播放', '听歌', '暂停', '暂停播放', '暂停音乐', '停止', '停止播放', '停一下',
   '继续', '继续播放', '下一首', '上一首', '切歌', '换一首', '音量', '声音', '顺序播放', '随机播放',
-  '单曲循环', '列表循环', 'pause', 'stop', 'next', 'previous',
+  '单曲循环', '单曲播放', '只播放这首', '播完这首停止', '列表循环', 'pause', 'stop', 'next', 'previous',
 ]);
 
 interface PendingHit {

@@ -7,6 +7,7 @@ export function getDefaultVoiceCommands(): VoiceCommand[] {
     { type: 'play_song', keywords: ['播放歌曲', '放歌曲', '我想听'], enabled: true },
     { type: 'set_play_mode', keywords: ['随机播放', '随机模式'], param: 'random', enabled: true },
     { type: 'set_play_mode', keywords: ['单曲循环', '循环播放这首'], param: 'single', enabled: true },
+    { type: 'set_play_mode', keywords: ['单曲播放', '只播放这首', '播完这首停止'], param: 'singlePlay', enabled: true },
     { type: 'set_play_mode', keywords: ['列表循环', '循环播放'], param: 'loop', enabled: true },
     { type: 'set_play_mode', keywords: ['顺序播放'], param: 'order', enabled: true },
     { type: 'set_volume', keywords: ['设置音量', '音量调到', '音量', '声音', '声音调到'], param: 'absolute', enabled: true },

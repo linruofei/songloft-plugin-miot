@@ -1,0 +1,72 @@
+<script setup lang="ts">
+import { computed, onMounted, ref } from 'vue';
+import SectionCard from '../../ui/SectionCard.vue';
+import SettingRow from '../../ui/SettingRow.vue';
+import SlButton from '../../ui/SlButton.vue';
+import SlCheckbox from '../../ui/SlCheckbox.vue';
+import SlInput from '../../ui/SlInput.vue';
+import SlSelect from '../../ui/SlSelect.vue';
+import SlSlider from '../../ui/SlSlider.vue';
+import SlSwitch from '../../ui/SlSwitch.vue';
+import { confirmAction, deleteSchedule, loadScheduleLogs, loadSchedules, managedDevices, messageOf, notify, saveConfig, saveSchedule, state, toggleSchedule } from '../../store';
+import type { ScheduleType, ScheduledTask, SelectOption } from '../../types';
+
+const editor = ref(false);
+const editingId = ref('');
+const name = ref('');
+const action = ref('play_playlist');
+const playlistId = ref('');
+const songId = ref('');
+const playMode = ref('');
+const startPosition = ref('first');
+const volume = ref(50);
+const scheduleType = ref<ScheduleType>('weekly');
+const time = ref('08:00');
+const weekdays = ref<number[]>([1, 2, 3, 4, 5]);
+const monthdays = ref<number[]>([1]);
+const holidayMode = ref('ignore');
+const allManaged = ref(true);
+const targetMembers = ref<string[]>([]);
+
+const actionOptions: SelectOption[] = [
+  { value: 'play_playlist', label: '播放歌单' },
+  { value: 'play_playlist_from', label: '播放歌单（指定位置）' },
+  { value: 'stop', label: '停止播放' },
+  { value: 'set_play_mode', label: '设置播放模式' },
+  { value: 'set_volume', label: '设置音量' },
+  { value: 'enable_monitor', label: '开启对话监听' },
+  { value: 'disable_monitor', label: '关闭对话监听' },
+];
+const typeOptions: SelectOption[] = [{ value: 'weekly', label: '每周' }, { value: 'monthly', label: '每月' }];
+const modeOptions: SelectOption[] = [{ value: '', label: '跟随上次设置' }, { value: 'order', label: '顺序播放' }, { value: 'loop', label: '列表循环' }, { value: 'single', label: '单曲循环' }, { value: 'random', label: '随机播放' }, { value: 'singlePlay', label: '单曲播放' }];
+const positionOptions: SelectOption[] = [{ value: 'first', label: '从第一首开始' }, { value: 'resume', label: '从上次进度继续' }, { value: 'random', label: '随机位置' }];
+const playlistOptions = computed(() => state.playlists.map((playlist) => ({ value: String(playlist.id), label: playlist.name })));
+const songOptions = computed(() => state.songs.map((song) => ({ value: String(song.id), label: `${song.title}${song.artist ? ` · ${song.artist}` : ''}` })));
+
+onMounted(() => { void Promise.all([loadSchedules(), loadScheduleLogs()]); });
+function resetEditor() { editingId.value = ''; name.value = ''; action.value = 'play_playlist'; playlistId.value = ''; songId.value = ''; playMode.value = ''; startPosition.value = 'first'; volume.value = 50; scheduleType.value = 'weekly'; time.value = '08:00'; weekdays.value = [1, 2, 3, 4, 5]; monthdays.value = [1]; holidayMode.value = 'ignore'; allManaged.value = true; targetMembers.value = []; editor.value = true; }
+function editTask(task: ScheduledTask) { editingId.value = task.id || ''; name.value = task.name; action.value = task.action; playlistId.value = String(task.params.playlist_id || ''); songId.value = String(task.params.song_id || ''); playMode.value = String(task.params.play_mode || ''); startPosition.value = String(task.params.start_position || 'first'); volume.value = Number(task.params.volume ?? 50); scheduleType.value = task.schedule.type; time.value = task.schedule.time; weekdays.value = [...(task.schedule.weekdays || [])]; monthdays.value = [...(task.schedule.monthdays || [])]; holidayMode.value = task.schedule.holiday_mode || 'ignore'; allManaged.value = !!task.target.all_managed; targetMembers.value = (task.target.devices || []).map((item) => `${item.account_id}:${item.device_id}`); editor.value = true; }
+function toggleDay(list: number[], day: number) { const index = list.indexOf(day); if (index >= 0) list.splice(index, 1); else list.push(day); }
+function targetDevices() { return targetMembers.value.map((value) => { const [account_id, device_id] = value.split(':'); return { account_id, device_id }; }); }
+async function saveCurrent() {
+  const task: ScheduledTask = { id: editingId.value || undefined, name: name.value.trim(), enabled: true, action: action.value, schedule: { type: scheduleType.value, time: time.value, weekdays: scheduleType.value === 'weekly' ? weekdays.value : undefined, monthdays: scheduleType.value === 'monthly' ? monthdays.value : undefined, holiday_mode: holidayMode.value }, target: { all_managed: allManaged.value, devices: allManaged.value ? [] : targetDevices() }, params: { ...(playlistId.value ? { playlist_id: Number(playlistId.value) } : {}), ...(songId.value ? { song_id: Number(songId.value) } : {}), ...(playMode.value ? { play_mode: playMode.value } : {}), ...(action.value === 'play_playlist' ? { start_position: startPosition.value } : {}), ...(action.value === 'set_volume' ? { volume: volume.value } : {}) } };
+  if (!task.name) { notify('请输入任务名称', 'warning'); return; }
+  if (!allManaged.value && !targetMembers.value.length) { notify('请至少选择一个目标设备', 'warning'); return; }
+  try { await saveSchedule(task); editor.value = false; } catch (error) { notify(messageOf(error), 'error'); }
+}
+async function removeTask(id?: string) { if (!id || !(await confirmAction('删除定时任务', '删除后无法恢复。', '删除', true))) return; try { await deleteSchedule(id); } catch (error) { notify(messageOf(error), 'error'); } }
+async function toggle(task: ScheduledTask, enabled: boolean) { try { await toggleSchedule(task, enabled); } catch (error) { notify(messageOf(error), 'error'); } }
+</script>
+
+<template>
+  <SectionCard title="时区设置" icon="schedule" description="定时任务使用插件配置的时区解释执行时间。">
+    <div class="form-body"><div class="field"><label class="field-label">时区</label><SlInput :model-value="state.config.timezone" placeholder="Asia/Shanghai" @update:model-value="state.config.timezone = $event" @change="saveConfig({ timezone: state.config.timezone })" /><p class="field-help">例如 Asia/Shanghai、Asia/Tokyo、America/Los_Angeles。</p></div></div>
+  </SectionCard>
+
+  <SectionCard title="定时任务" icon="schedule" description="支持每周和每月调度、法定节假日规则以及指定设备。">
+    <SettingRow title="启用定时任务" subtitle="全局关闭后所有任务暂停执行"><SlSwitch :model-value="state.config.scheduled_tasks_enabled" @update:model-value="saveConfig({ scheduled_tasks_enabled: $event })" /></SettingRow>
+    <div class="form-body"><div class="field-actions" style="justify-content:space-between"><span class="field-help">{{ state.schedules.length }} 个任务</span><SlButton variant="filled" label="新建任务" icon="add" @click="resetEditor" /></div><div v-if="editor" class="sub-panel"><div class="field"><label class="field-label">任务名称</label><SlInput v-model="name" placeholder="例如：早上播放音乐" aria-label="任务名称" /></div><div class="field"><label class="field-label">动作</label><SlSelect v-model="action" :options="actionOptions" aria-label="动作类型" /></div><div v-if="action === 'play_playlist' || action === 'play_playlist_from'" class="field-grid"><div class="field"><label class="field-label">歌单</label><SlSelect v-model="playlistId" :options="playlistOptions" placeholder="选择歌单" allow-empty aria-label="选择歌单" /></div><div v-if="action === 'play_playlist_from'" class="field"><label class="field-label">起始歌曲</label><SlSelect v-model="songId" :options="songOptions" placeholder="从第一首开始" allow-empty aria-label="起始歌曲" /></div></div><div v-if="action === 'play_playlist'" class="field"><label class="field-label">起始位置</label><SlSelect v-model="startPosition" :options="positionOptions" aria-label="起始位置" /></div><div v-if="action === 'play_playlist' || action === 'play_playlist_from' || action === 'set_play_mode'" class="field"><label class="field-label">播放模式</label><SlSelect v-model="playMode" :options="modeOptions" aria-label="播放模式" /></div><div v-if="action === 'set_volume'" class="field"><label class="field-label">音量 {{ volume }}%</label><SlSlider v-model="volume" :max="100" aria-label="定时任务音量" /></div><div class="field-grid"><div class="field"><label class="field-label">调度类型</label><SlSelect v-model="scheduleType" :options="typeOptions" aria-label="调度类型" /></div><div class="field"><label class="field-label">执行时间</label><SlInput v-model="time" placeholder="08:00" aria-label="执行时间" /></div></div><template v-if="scheduleType === 'weekly'"><label class="field-label">选择星期</label><div class="day-grid"> <button v-for="day in [1,2,3,4,5,6,0]" :key="day" type="button" :class="{ active: weekdays.includes(day) }" @click="toggleDay(weekdays, day)">{{ ['日','一','二','三','四','五','六'][day] }}</button></div><div class="field-actions"><SlButton variant="text" label="每天" @click="weekdays = [0,1,2,3,4,5,6]" /><SlButton variant="text" label="工作日" @click="weekdays = [1,2,3,4,5]" /></div><div class="field" style="margin-top:12px"><label class="field-label">节假日模式</label><SlSelect v-model="holidayMode" :options="[{ value: 'ignore', label: '忽略节假日' }, { value: 'only_holiday', label: '仅法定节假日触发' }, { value: 'exclude_holiday', label: '跳过节假日，含调休补班' }]" aria-label="节假日模式" /></div></template><template v-else><label class="field-label">选择日期</label><div class="day-grid" style="grid-template-columns:repeat(7,1fr)"><button v-for="day in 31" :key="day" type="button" :class="{ active: monthdays.includes(day) }" @click="toggleDay(monthdays, day)">{{ day }}</button></div></template><label class="field-label" style="margin-top:16px">目标设备</label><SettingRow title="所有受管理设备"><SlSwitch v-model="allManaged" /></SettingRow><div v-if="!allManaged" class="sub-panel"><div v-for="item in managedDevices" :key="`${item.accountId}:${item.device.device_id || item.device.deviceID}`" class="device-check-row"><SlCheckbox :model-value="targetMembers.includes(`${item.accountId}:${item.device.device_id || item.device.deviceID}`)" @update:model-value="(value) => value ? targetMembers.push(`${item.accountId}:${item.device.device_id || item.device.deviceID}`) : targetMembers = targetMembers.filter((id) => id !== `${item.accountId}:${item.device.device_id || item.device.deviceID}`)" /><div class="device-check-copy"><strong>{{ item.device.name }}</strong><small>{{ item.accountName }}</small></div></div></div><div class="field-actions"><SlButton variant="text" label="取消" @click="editor = false" /><SlButton variant="filled" label="保存" icon="save" @click="saveCurrent" /></div></div><div v-for="task in state.schedules" :key="task.id" class="list-item"><div class="list-item-copy"><strong class="list-item-title">{{ task.name }}</strong><span class="list-item-subtitle">{{ task.schedule.type === 'weekly' ? '每周' : '每月' }} {{ task.schedule.time }} · {{ task.action }}</span></div><SlSwitch :model-value="task.enabled" @update:model-value="toggle(task, $event)" /><SlButton variant="icon" icon="edit" title="编辑任务" @click="editTask(task)" /><SlButton variant="icon" icon="delete" title="删除任务" @click="removeTask(task.id)" /></div><div v-if="!state.schedules.length && !editor" class="empty-state">暂无定时任务</div></div>
+  </SectionCard>
+
+  <SectionCard title="执行日志" icon="terminal"><div class="form-body"><div class="field-actions"><SlButton variant="text" label="刷新日志" icon="refresh" @click="loadScheduleLogs" /></div><div v-for="log in state.scheduleLogs" :key="String(log.id || log.timestamp)" class="list-item"><div class="list-item-copy"><strong class="list-item-title">{{ log.task_name || log.task_id }}</strong><span class="list-item-subtitle">{{ log.message || '无消息' }} · {{ log.timestamp }}</span></div><span class="chip" :class="log.success ? 'chip-success' : 'chip-error'">{{ log.success ? '成功' : '失败' }}</span></div><div v-if="!state.scheduleLogs.length" class="empty-state">暂无执行日志</div></div></SectionCard>
+</template>

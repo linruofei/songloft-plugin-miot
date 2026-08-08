@@ -1,0 +1,154 @@
+<script setup lang="ts">
+import { computed, onMounted, onUnmounted, ref } from 'vue';
+import SectionCard from '../../ui/SectionCard.vue';
+import SettingRow from '../../ui/SettingRow.vue';
+import SlButton from '../../ui/SlButton.vue';
+import SlCheckbox from '../../ui/SlCheckbox.vue';
+import SlInput from '../../ui/SlInput.vue';
+import SlSelect from '../../ui/SlSelect.vue';
+import SlSwitch from '../../ui/SlSwitch.vue';
+import { postEnvelope } from '../../api';
+import { deviceId, deviceName, confirmAction, deleteGroup, loadAccountsAndDevices, loadGroups, messageOf, saveConfig, saveGroup, state, toggleManaged, notify } from '../../store';
+import type { DeviceGroup, DeviceMember, SelectOption } from '../../types';
+
+const authTab = ref<'qrcode' | 'password' | 'token'>('qrcode');
+const serverChoice = ref(state.config.server_host || '');
+const customHost = ref('');
+const username = ref('');
+const password = ref('');
+const tokenUserId = ref('');
+const passToken = ref('');
+const captcha = ref('');
+const verifyCode = ref('');
+const verifyUrl = ref('');
+const loginAccountId = ref('');
+const loginBusy = ref(false);
+const loginMessage = ref('');
+const qrUrl = ref('');
+const qrStatus = ref('');
+const qrBusy = ref(false);
+const extraModels = ref('');
+const groupEditor = ref(false);
+const editGroupId = ref('');
+const groupName = ref('');
+const selectedMembers = ref<string[]>([]);
+let qrTimer: ReturnType<typeof setInterval> | null = null;
+
+const hostOptions = computed<SelectOption[]>(() => [
+  ...state.config.suggested_addresses.map((value) => ({ value, label: value })),
+  { value: '__custom__', label: '自定义地址' },
+]);
+const isCustomHost = computed(() => serverChoice.value === '__custom__');
+const managed = computed(() => state.devices.flatMap((account) => account.devices.filter((device) => device.managed).map((device) => ({ accountId: account.account_id, device }))));
+const accountStatuses = computed(() => state.accounts);
+
+onMounted(() => {
+  serverChoice.value = state.config.suggested_addresses.includes(state.config.server_host) ? state.config.server_host : (state.config.server_host ? '__custom__' : '');
+  customHost.value = state.config.server_host;
+  extraModels.value = state.config.extra_music_api_models.join(', ');
+  void Promise.all([loadAccountsAndDevices(), loadGroups()]);
+});
+onUnmounted(() => { if (qrTimer) clearInterval(qrTimer); });
+
+async function saveServerHost() {
+  const host = (isCustomHost.value ? customHost.value : serverChoice.value).trim();
+  if (!host) { notify('请选择或填写服务器地址', 'warning'); return; }
+  await saveConfig({ server_host: host });
+  state.config.server_host_status = host.includes('localhost') || host.includes('127.0.0.1') ? 'loopback' : 'ok';
+}
+async function autoFill() {
+  if (state.config.suggested_addresses[0]) {
+    serverChoice.value = state.config.suggested_addresses[0];
+    customHost.value = serverChoice.value;
+    notify('已填入检测到的局域网地址', 'info');
+  } else notify('未检测到可用局域网地址', 'warning');
+}
+async function submitPassword() {
+  if (!username.value.trim() || !password.value) { notify('请填写用户名和密码', 'warning'); return; }
+  loginBusy.value = true;
+  try {
+    const result = await postEnvelope<Record<string, unknown>>('/auth/login', { username: username.value.trim(), password: password.value });
+    loginAccountId.value = String(result.account_id || username.value.trim());
+    loginMessage.value = String(result.message || '');
+    if (result.state === 'need_captcha' || result.state === 1) loginMessage.value = '请输入图形验证码';
+    else if (result.state === 'need_verify' || result.state === 2) { verifyUrl.value = String(result.verify_url || ''); loginMessage.value = '请完成二次验证后输入验证码'; }
+    else { notify('账号登录成功', 'success'); username.value = ''; password.value = ''; await loadAccountsAndDevices(); }
+  } catch (error) { loginMessage.value = messageOf(error); notify(loginMessage.value, 'error'); }
+  finally { loginBusy.value = false; }
+}
+async function submitCaptcha() {
+  if (!captcha.value) return;
+  try { const result = await postEnvelope<Record<string, unknown>>('/auth/captcha', { account_id: loginAccountId.value, captcha: captcha.value }); loginMessage.value = String(result.message || ''); if (result.state === 'success' || result.state === 0) { notify('登录成功', 'success'); await loadAccountsAndDevices(); } } catch (error) { notify(messageOf(error), 'error'); }
+}
+async function submitVerify() {
+  if (!verifyCode.value) return;
+  try { const result = await postEnvelope<Record<string, unknown>>('/auth/verify', { account_id: loginAccountId.value, code: verifyCode.value }); loginMessage.value = String(result.message || ''); notify('登录成功', 'success'); await loadAccountsAndDevices(); } catch (error) { notify(messageOf(error), 'error'); }
+}
+function openVerifyPage() {
+  if (verifyUrl.value) window.open(verifyUrl.value, '_blank', 'noopener,noreferrer');
+}
+async function addToken() {
+  if (!tokenUserId.value.trim() || !passToken.value.trim()) { notify('请填写 User ID 和 Pass Token', 'warning'); return; }
+  try { await postEnvelope('/auth/token', { user_id: tokenUserId.value.trim(), pass_token: passToken.value.trim() }); notify('Token 账号添加成功', 'success'); tokenUserId.value = ''; passToken.value = ''; await loadAccountsAndDevices(); } catch (error) { notify(messageOf(error), 'error'); }
+}
+async function startQr() {
+  if (qrTimer) clearInterval(qrTimer);
+  qrBusy.value = true; qrStatus.value = '正在获取二维码'; qrUrl.value = '';
+  try {
+    const result = await postEnvelope<Record<string, unknown>>('/auth/qrcode', {});
+    loginAccountId.value = String(result.account_id || ''); qrUrl.value = String(result.qrcode_url || ''); qrStatus.value = '请使用米家 App 扫码'; qrBusy.value = false;
+    qrTimer = setInterval(async () => {
+      try {
+        const poll = await postEnvelope<Record<string, unknown>>('/auth/qrcode/poll', { account_id: loginAccountId.value });
+        if (poll.state === 'success') { if (qrTimer) clearInterval(qrTimer); qrStatus.value = '登录成功'; notify('扫码登录成功', 'success'); await loadAccountsAndDevices(); }
+        else if (poll.state === 'expired' || poll.state === 'timeout' || poll.state === 'error') { if (qrTimer) clearInterval(qrTimer); qrStatus.value = String(poll.message || '二维码已过期'); }
+      } catch { /* keep polling; transient errors are expected */ }
+    }, 2500);
+  } catch (error) { qrBusy.value = false; qrStatus.value = messageOf(error); notify(qrStatus.value, 'error'); }
+}
+async function relogin(id: string) { try { await postEnvelope('/auth/relogin', { account_id: id }); notify('重新登录成功', 'success'); await loadAccountsAndDevices(); } catch (error) { notify(messageOf(error), 'warning'); } }
+async function removeAccount(id: string) { if (await confirmAction('删除账号', `确定删除账号“${id}”吗？此操作不可撤销。`, '删除', true)) { try { await import('../../api').then(({ del }) => del(`/account?account_id=${encodeURIComponent(id)}`)); notify('账号已删除', 'success'); await loadAccountsAndDevices(); } catch (error) { notify(messageOf(error), 'error'); } } }
+async function setManaged(accountId: string, id: string, value: boolean) { try { await toggleManaged(accountId, id, value); } catch (error) { notify(messageOf(error), 'error'); } }
+
+function openGroup(group?: DeviceGroup) { groupEditor.value = true; editGroupId.value = group?.id || ''; groupName.value = group?.name || ''; selectedMembers.value = (group?.members || []).map((member) => `${member.account_id}:${member.device_id}`); }
+function closeGroup() { groupEditor.value = false; }
+async function saveCurrentGroup() { if (!groupName.value.trim() || selectedMembers.value.length < 2) { notify('请输入分组名称并至少选择两台设备', 'warning'); return; } const members: DeviceMember[] = selectedMembers.value.map((value) => { const [account_id, device_id] = value.split(':'); return { account_id, device_id }; }); try { await saveGroup({ id: editGroupId.value || undefined, name: groupName.value.trim(), members }); closeGroup(); } catch (error) { notify(messageOf(error), 'error'); } }
+async function removeGroup(id: string) { if (await confirmAction('删除设备分组', '删除后成员会恢复为独立设备播放。', '删除', true)) { try { await deleteGroup(id); } catch (error) { notify(messageOf(error), 'error'); } } }
+async function saveModels() { const values = extraModels.value.split(',').map((item) => item.trim()).filter(Boolean); await saveConfig({ extra_music_api_models: values }); }
+</script>
+
+<template>
+  <SectionCard title="服务器配置" icon="dns" description="音箱必须能访问这里填写的地址；localhost 和 127.0.0.1 只适合浏览器本机调试。">
+    <div class="form-body">
+      <div class="field"><label class="field-label">服务器地址</label><SlSelect v-model="serverChoice" :options="hostOptions" placeholder="选择服务器地址" allow-empty aria-label="服务器地址" /><SlInput v-if="isCustomHost" v-model="customHost" style="margin-top:8px" placeholder="例如 http://192.168.1.100:58091" aria-label="自定义服务器地址" /></div>
+      <div v-if="state.config.server_host_status !== 'ok'" class="field-help">{{ state.config.server_host_status === 'loopback' ? '当前地址为本地回环地址，音箱无法访问。' : '尚未配置可用地址。' }}</div>
+      <div class="field-actions"><SlButton variant="text" label="自动填充" icon="auto_fix_high" @click="autoFill" /><SlButton variant="filled" label="保存" icon="save" @click="saveServerHost" /></div>
+    </div>
+  </SectionCard>
+
+  <SectionCard title="添加账号" icon="person_add" description="支持扫码、账号密码和手动 Token 三种登录方式。">
+    <div class="tab-strip"><button :class="{ active: authTab === 'qrcode' }" @click="authTab = 'qrcode'">扫码登录</button><button :class="{ active: authTab === 'password' }" @click="authTab = 'password'">账号密码</button><button :class="{ active: authTab === 'token' }" @click="authTab = 'token'">手动 Token</button></div>
+    <div class="form-body">
+      <template v-if="authTab === 'qrcode'"><p class="field-help">使用米家 App 扫描二维码，扫码成功后会自动创建账号。</p><SlButton variant="filled" block label="获取二维码" icon="qr_code_2" :disabled="qrBusy" @click="startQr" /><div v-if="qrUrl" class="qr-box"><img :src="qrUrl" alt="登录二维码" /><p>{{ qrStatus }}</p></div><p v-else-if="qrStatus" class="field-help">{{ qrStatus }}</p></template>
+      <template v-else-if="authTab === 'password'"><div class="field"><label class="field-label">用户名</label><SlInput v-model="username" placeholder="手机号或邮箱" aria-label="用户名" /></div><div class="field"><label class="field-label">密码</label><SlInput v-model="password" type="password" placeholder="密码" aria-label="密码" @submit="submitPassword" /></div><SlButton variant="filled" block label="登录并添加" icon="login" :disabled="loginBusy" @click="submitPassword" /><p v-if="loginMessage" class="field-help">{{ loginMessage }}</p><div v-if="loginMessage.includes('验证码')" class="sub-panel"><SlInput v-model="captcha" placeholder="输入图形验证码" aria-label="验证码" /><SlButton variant="filled" label="提交验证码" @click="submitCaptcha" /></div><div v-if="verifyUrl || loginMessage.includes('二次')" class="sub-panel"><SlButton variant="outlined" label="打开验证页面" icon="open_in_new" @click="openVerifyPage" /><div class="inline-fields" style="margin-top:8px"><SlInput v-model="verifyCode" placeholder="验证码" aria-label="二次验证码" /><SlButton variant="filled" label="提交" @click="submitVerify" /></div></div></template>
+      <template v-else><p class="field-help">从浏览器 Cookie 中获取 userId 和 passToken。凭据只发送给 MIoT 插件，不会显示在日志中。</p><div class="field"><label class="field-label">User ID</label><SlInput v-model="tokenUserId" placeholder="Cookie 中的 userId" aria-label="User ID" /></div><div class="field"><label class="field-label">Pass Token</label><SlInput v-model="passToken" type="password" placeholder="Cookie 中的 passToken" aria-label="Pass Token" /></div><SlButton variant="filled" block label="添加账号" icon="key" @click="addToken" /></template>
+    </div>
+  </SectionCard>
+
+  <SectionCard title="已登录账号" icon="group">
+    <div class="form-body"><div v-if="!accountStatuses.length" class="empty-state">暂无账号，请先添加</div><div v-for="account in accountStatuses" :key="account.id" class="list-item"><div class="list-item-copy"><strong class="list-item-title">{{ account.account_name || account.account || account.id }}</strong><span class="list-item-subtitle">{{ account.logged_in && account.is_valid !== false ? '已登录' : '需要重新登录' }}<span v-if="account.user_id"> · User ID {{ account.user_id }}</span></span></div><span class="chip" :class="account.logged_in && account.is_valid !== false ? 'chip-success' : 'chip-warning'">{{ account.logged_in && account.is_valid !== false ? '正常' : '待处理' }}</span><SlButton variant="icon" icon="refresh" title="重新登录" @click="relogin(account.id)" /><SlButton variant="icon" icon="delete" title="删除账号" @click="removeAccount(account.id)" /></div></div>
+  </SectionCard>
+
+  <SectionCard title="设备管理" icon="speaker_group" description="开启管理后，设备才会出现在播放选择器、分组和定时任务中。">
+    <div class="form-body"><div v-if="!state.devices.length" class="empty-state">暂无设备，请先登录账号并刷新。</div><div v-for="account in state.devices" :key="account.account_id" class="device-account"><h3 class="card-title">{{ account.account_name || account.account_id }}</h3><div v-for="device in account.devices" :key="deviceId(device)" class="device-check-row"><SlCheckbox :model-value="!!device.managed" :aria-label="`管理 ${deviceName(device)}`" @update:model-value="setManaged(account.account_id, deviceId(device), $event)" /><div class="device-check-copy"><strong>{{ deviceName(device) }}</strong><small>{{ device.model || device.hardware || '未知型号' }} · {{ device.presence === 'online' ? '在线' : '离线' }}</small></div><span class="chip" :class="device.presence === 'online' ? 'chip-success' : 'chip-warning'">{{ device.presence === 'online' ? '在线' : '离线' }}</span></div></div></div>
+  </SectionCard>
+
+  <SectionCard title="设备分组" icon="speaker_group" description="组内设备共享队列、播放模式和控制操作；一台设备只能属于一个组。">
+    <div class="form-body"><SlButton variant="filled" block label="新建分组" icon="add" @click="openGroup()" /><div v-if="groupEditor" class="sub-panel"><div class="field"><label class="field-label">分组名称</label><SlInput v-model="groupName" placeholder="例如 客厅 + 卧室" aria-label="分组名称" /></div><label class="field-label">选择至少两台已管理设备</label><div v-for="item in managed" :key="`${item.accountId}:${deviceId(item.device)}`" class="device-check-row"><SlCheckbox :model-value="selectedMembers.includes(`${item.accountId}:${deviceId(item.device)}`)" @update:model-value="(value) => value ? selectedMembers.push(`${item.accountId}:${deviceId(item.device)}`) : selectedMembers = selectedMembers.filter((key) => key !== `${item.accountId}:${deviceId(item.device)}`)" /><div class="device-check-copy"><strong>{{ deviceName(item.device) }}</strong><small>{{ item.accountId }}</small></div></div><div class="field-actions"><SlButton variant="text" label="取消" @click="closeGroup" /><SlButton variant="filled" label="保存" icon="save" @click="saveCurrentGroup" /></div></div><div v-if="!state.groups.length && !groupEditor" class="empty-state">暂无分组</div><div v-for="group in state.groups" :key="group.id" class="list-item"><div class="list-item-copy"><strong class="list-item-title">{{ group.name }}</strong><span class="list-item-subtitle">{{ group.members.length }} 台设备</span></div><SlButton variant="icon" icon="edit" title="编辑分组" @click="openGroup(group)" /><SlButton variant="icon" icon="delete" title="删除分组" @click="removeGroup(group.id)" /></div></div>
+  </SectionCard>
+
+  <SectionCard title="设备播放能力" icon="speaker">
+    <div class="form-body"><div class="field"><label class="field-label">自定义 Music API 型号</label><SlInput v-model="extraModels" placeholder="例如 L15A, L16A" aria-label="自定义 Music API 型号" /><p class="field-help">播放静音时，可将设备型号加入此列表。</p></div><div class="field-actions"><SlButton variant="filled" label="保存" @click="saveModels" /></div></div>
+    <SettingRow title="播放时保持指示灯" subtitle="关闭后播放时音箱指示灯不亮，适合夜间使用"><SlSwitch v-model="state.config.indicator_light_enabled" aria-label="播放时保持指示灯" @update:model-value="saveConfig({ indicator_light_enabled: $event })" /></SettingRow>
+  </SectionCard>
+</template>

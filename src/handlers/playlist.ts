@@ -3,11 +3,12 @@
 
 import { jsonResponse, parseQuery } from '@songloft/plugin-sdk';
 import type { Router, HTTPRequest } from '@songloft/plugin-sdk';
-import { PlaylistManagerMap, isTempPlaylistId } from '../player/manager';
+import { PlaylistManagerMap, isTempPlaylistId, normalizePlayMode } from '../player/manager';
 import type { PlaylistManager } from '../player/manager';
 import { MinaService } from '../service/service';
 import { ConfigManager } from '../config/manager';
 import { callHostAPI } from '../utils/http';
+import { findFavoritesPlaylist } from '../utils/favorites';
 import type { PlayMode, PlayState } from '../types';
 
 /** 解析请求体（兼容 Uint8Array 和 string） */
@@ -258,6 +259,7 @@ export async function resolvePlayerStatus(
  * POST /player/stop          → 停止播放
  * POST /player/previous      → 上一首
  * POST /player/next          → 下一首
+ * POST /player/seek          → 跳转播放进度
  * POST /player/mode          → 设置播放模式
  * GET  /player/status        → 获取播放状态
  */
@@ -339,7 +341,7 @@ export function registerPlaylistHandlers(
       }
 
       const manager = await playlistManagerMap.getOrCreate(account_id, device_id);
-      const mode: PlayMode = play_mode || 'order';
+      const mode = normalizePlayMode(play_mode);
       const playlistId = Number(playlist_id);
       const startIndex = Number(start_index) || 0;
       const songId = Number(song_id) || 0;
@@ -537,9 +539,58 @@ export function registerPlaylistHandlers(
 
       const ok = await manager.next();
       if (!ok) {
+        const status = manager.getStatus();
+        if (status.state === 'stopped') {
+          updateDeviceStatusCache(account_id, device_id, { state: 'stopped', position: status.position });
+          return jsonResponse({ success: true, data: { message: 'playlist completed', state: 'stopped', current_song: status.current_song } });
+        }
         return jsonResponse({ success: false, error: 'failed to play next' });
       }
       return jsonResponse({ success: true, data: { message: 'playing next song', current_song: manager.getCurrentSong() } });
+    } catch (e: any) {
+      return jsonResponse({ success: false, error: e.message || String(e) });
+    }
+  });
+
+  // POST /player/seek - 跳转播放进度
+  router.post('/player/seek', async (req: HTTPRequest) => {
+    try {
+      const body = parseBody(req);
+      const query = parseQuery(req.query);
+      const account_id = body.account_id || query.account_id;
+      const device_id = body.device_id || query.device_id;
+      const requestedPosition = Number(body.position);
+
+      if (!account_id || !device_id) {
+        return jsonResponse({ success: false, error: 'account_id and device_id are required' });
+      }
+      if (!Number.isFinite(requestedPosition) || requestedPosition < 0) {
+        return jsonResponse({ success: false, error: 'position must be a non-negative number' });
+      }
+
+      const manager = playlistManagerMap.get(account_id, device_id);
+      const song = manager?.getCurrentSong();
+      if (!manager || !song) {
+        return jsonResponse({ success: false, error: 'no active song for this device' });
+      }
+      if (song.type === 'radio' || !song.duration || song.duration <= 0) {
+        return jsonResponse({ success: false, error: 'current song does not support seeking' });
+      }
+
+      // playCurrent 会把靠近结尾的 seek 退化为整首重播，因此在端点处显式夹到安全范围。
+      const position = Math.min(Math.floor(requestedPosition), Math.max(0, song.duration - 3));
+      const wasPaused = manager.getStatus().state === 'paused';
+      const ok = await manager.replayCurrent(position);
+      if (!ok) {
+        return jsonResponse({ success: false, error: 'failed to seek current song' });
+      }
+      if (wasPaused) {
+        await manager.pause();
+      }
+
+      const state = wasPaused ? 'paused' : 'playing';
+      updateDeviceStatusCache(account_id, device_id, { state, position });
+      return jsonResponse({ success: true, data: { message: 'playback position updated', state, position } });
     } catch (e: any) {
       return jsonResponse({ success: false, error: e.message || String(e) });
     }
@@ -566,8 +617,9 @@ export function registerPlaylistHandlers(
         return jsonResponse({ success: false, error: 'no active playlist for this device' });
       }
 
-      await manager.setPlayMode(play_mode as PlayMode);
-      return jsonResponse({ success: true, data: { message: 'play mode set', play_mode } });
+      const mode = normalizePlayMode(play_mode);
+      await manager.setPlayMode(mode);
+      return jsonResponse({ success: true, data: { message: 'play mode set', play_mode: mode } });
     } catch (e: any) {
       return jsonResponse({ success: false, error: e.message || String(e) });
     }
@@ -599,12 +651,12 @@ export function registerPlaylistHandlers(
         return jsonResponse({ success: false, error: 'song_id is required' });
       }
       const playlists = await songloft.playlists.list();
-      const favPlaylist = playlists.find(p => p.name === '收藏' && p.type === 'normal');
+      const favPlaylist = findFavoritesPlaylist(playlists);
       if (!favPlaylist) {
         return jsonResponse({ success: true, data: { is_favorited: false } });
       }
-      const songs = await songloft.playlists.getSongs(favPlaylist.id, { limit: 100000, brief: true } as any);
-      const isFavorited = songs.some((s: any) => s.id === songId);
+      const songs = await songloft.playlists.getSongs(favPlaylist.id, { limit: 100000 });
+      const isFavorited = songs.some(song => Number(song.id) === songId);
       return jsonResponse({ success: true, data: { is_favorited: isFavorited, playlist_id: favPlaylist.id } });
     } catch (e: any) {
       return jsonResponse({ success: false, error: e.message || String(e) });
@@ -624,14 +676,14 @@ export function registerPlaylistHandlers(
         return jsonResponse({ success: false, error: 'action must be "add" or "remove"' });
       }
       const playlists = await songloft.playlists.list();
-      const favPlaylist = playlists.find(p => p.name === '收藏' && p.type === 'normal');
+      const favPlaylist = findFavoritesPlaylist(playlists);
       if (!favPlaylist) {
         return jsonResponse({ success: false, error: '未找到收藏歌单' });
       }
       if (action === 'add') {
-        await callHostAPI('POST', `/api/v1/playlists/${favPlaylist.id}/songs`, { song_ids: [songId] });
+        await songloft.playlists.addSongs(favPlaylist.id, [songId]);
       } else {
-        await callHostAPI('DELETE', `/api/v1/playlists/${favPlaylist.id}/songs/${songId}`);
+        await songloft.playlists.removeSongs(favPlaylist.id, [songId]);
       }
       return jsonResponse({ success: true, data: { is_favorited: action === 'add' } });
     } catch (e: any) {

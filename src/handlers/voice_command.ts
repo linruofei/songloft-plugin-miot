@@ -245,6 +245,25 @@ export function registerVoiceCommandHandlers(
     }
   });
 
+  // POST /voice-commands/sleep-timer - 设置 sleep timer
+  router.post('/voice-commands/sleep-timer', async (req: HTTPRequest) => {
+    try {
+      const body = parseBody(req);
+      const { account_id: accountId, device_id: deviceId, mode } = body;
+      const value = Number(body.value);
+      if (!accountId || !deviceId) {
+        return jsonResponse({ success: false, error: 'account_id and device_id are required' });
+      }
+      if (mode !== 'time' && mode !== 'songs') {
+        return jsonResponse({ success: false, error: 'mode must be "time" or "songs"' });
+      }
+      const state = voiceEngine.setSleepTimer(accountId, deviceId, mode, value);
+      return jsonResponse({ success: true, data: state });
+    } catch (e: any) {
+      return jsonResponse({ success: false, error: e.message || String(e) });
+    }
+  });
+
   // POST /voice-commands/sleep-timer/cancel - 取消 sleep timer
   router.post('/voice-commands/sleep-timer/cancel', async (req: HTTPRequest) => {
     try {
