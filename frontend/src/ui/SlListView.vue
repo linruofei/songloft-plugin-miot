@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useNativeList } from '../runtime';
-withDefaults(defineProps<{ height?: string; ariaLabel?: string }>(), { height: '420px' });
+defineProps<{ ariaLabel?: string }>();
 </script>
 
 <template>
@@ -8,10 +8,10 @@ withDefaults(defineProps<{ height?: string; ariaLabel?: string }>(), { height: '
     v-if="useNativeList"
     class="sl-list-view"
     shrink-wrap="false"
-    :style="{ height }"
+    scroll-direction="vertical"
     :aria-label="ariaLabel"
   ><slot /></webf-list-view>
-  <div v-else class="sl-list-view sl-list-view-html" :style="{ height }" :aria-label="ariaLabel">
+  <div v-else class="sl-list-view sl-list-view-html" :aria-label="ariaLabel">
     <slot />
   </div>
 </template>

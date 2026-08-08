@@ -103,7 +103,7 @@ onUnmounted(() => {
       <SlButton variant="icon" icon="my_location" title="定位当前播放" @click="locateCurrentSong" />
     </div>
 
-    <SlListView v-if="state.selectedPlaylistId && !state.songsLoading && !state.songsError" :height="'var(--miot-list-height)'" aria-label="歌曲列表">
+    <SlListView v-if="state.selectedPlaylistId && !state.songsLoading && !state.songsError" aria-label="歌曲列表">
       <SongRow v-for="(song, index) in visibleSongs" :key="song.id" :song="song" :index="index" @play="play" />
       <div v-if="visibleSongs.length === 0" class="song-list-empty">没有匹配的歌曲</div>
     </SlListView>

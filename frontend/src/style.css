@@ -1,7 +1,7 @@
 :root {
   --miot-content-width: 1200px;
   --miot-detail-width: 800px;
-  --miot-list-height: clamp(128px, calc(100vh - 254px), 100vh);
+  --miot-list-height: clamp(240px, calc(100vh - 254px), 720px);
   --miot-nav-width: 280px;
   --miot-row-height: 64px;
 }
@@ -126,8 +126,9 @@ h1, h2, h3, p { margin: 0; }
 .switch input:checked ~ .switch-thumb { transform: translateX(20px); background: var(--md-on-primary); }
 .sl-slider, .sl-slider-native { width: 100%; }
 .sl-slider { accent-color: var(--md-primary); }
-.sl-list-view { display: block; width: 100%; overflow-y: auto; }
-.sl-list-view-html { border-top: 1px solid var(--md-outline-variant); }
+.sl-list-view { display: block; width: 100%; height: var(--miot-list-height); }
+.sl-list-view:not(.sl-list-view-html) { overflow: hidden; }
+.sl-list-view-html { overflow-y: auto; border-top: 1px solid var(--md-outline-variant); }
 
 .search-bar { display: flex; align-items: center; gap: 8px; height: 48px; margin-bottom: 12px; padding: 0 12px; border: 1px solid var(--md-outline-variant); border-radius: var(--md-radius-full); background: var(--md-surface-container-low); color: var(--md-on-surface-variant); }
 .search-bar input { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; color: var(--md-on-surface); }
