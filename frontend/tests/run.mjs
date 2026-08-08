@@ -91,9 +91,9 @@ assert.match(style, /\.sl-list-view\s*\{[^}]*height: var\(--miot-list-height\)/)
 assert.match(slListView, /shrink-wrap="false"/);
 assert.match(slListView, /scroll-direction="vertical"/);
 assert.doesNotMatch(mainPage, /:height="'var\(--miot-list-height\)'"/);
-assert.match(mainPage, /songRenderLimit = ref\(50\)/);
+assert.match(mainPage, /songRenderLimit = ref\(20\)/);
 assert.match(mainPage, /visibleSongs\.value\.slice\(0, songRenderLimit\.value\)/);
-assert.match(mainPage, /songRenderLimit\.value = Math\.min\(songRenderLimit\.value \+ 50/);
+assert.match(mainPage, /songRenderLimit\.value = Math\.min\(songRenderLimit\.value \+ songRenderBatchSize/);
 assert.match(slListView, /defineEmits<\{ scroll/);
 assert.match(style, /\.player-bar-shell[\s\S]*position: fixed/);
 assert.match(style, /\.song-cover[^}]*width: 48px[^}]*height: 48px/);

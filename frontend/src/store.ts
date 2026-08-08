@@ -400,6 +400,8 @@ export async function setVolume(volume: number): Promise<void> {
 
 export async function refreshPlayerStatus(): Promise<void> {
   if (!state.currentAccountId || !state.currentDeviceId) return;
+  if (statusRequestBusy) return;
+  statusRequestBusy = true;
   try {
     state.player = await get<PlayerStatus>(
       `/player/status${query({
@@ -409,6 +411,8 @@ export async function refreshPlayerStatus(): Promise<void> {
     );
   } catch (error) {
     if (!state.statusConnected) console.warn('[miot] status refresh failed', messageOf(error));
+  } finally {
+    statusRequestBusy = false;
   }
 }
 
@@ -417,11 +421,12 @@ let statusReconnect: ReturnType<typeof setTimeout> | null = null;
 let statusPoll: ReturnType<typeof setInterval> | null = null;
 let statusAttempts = 0;
 let statusManualClose = false;
+let statusRequestBusy = false;
 
 function startStatusPolling() {
   if (statusPoll) return;
   void refreshPlayerStatus();
-  statusPoll = setInterval(() => void refreshPlayerStatus(), 1500);
+  statusPoll = setInterval(() => void refreshPlayerStatus(), 5000);
 }
 
 function scheduleStatusReconnect() {
@@ -520,8 +525,8 @@ export async function deleteGroup(id: string) {
 
 export async function loadSchedules(): Promise<void> {
   const result = await get<{ enabled: boolean; tasks: ScheduledTask[] }>('/schedules');
-  state.schedules = result.tasks || [];
-  state.config.scheduled_tasks_enabled = !!result.enabled;
+  state.schedules = Array.isArray(result?.tasks) ? result.tasks : [];
+  state.config.scheduled_tasks_enabled = !!result?.enabled;
 }
 
 export async function saveSchedule(task: ScheduledTask): Promise<void> {
@@ -553,11 +558,11 @@ export async function loadVoiceData(): Promise<void> {
     get<Webhook[]>('/conversation/webhooks').catch(() => []),
     get<IndexStatus>('/indexing/status').catch(() => ({})),
   ]);
-  state.voiceCommands = commands.commands || [];
-  state.config.voice_command_enabled = !!commands.enabled;
-  state.conversationStatus = conversation;
-  state.webhooks = webhooks;
-  state.indexStatus = index;
+  state.voiceCommands = Array.isArray(commands?.commands) ? commands.commands : [];
+  state.config.voice_command_enabled = !!commands?.enabled;
+  state.conversationStatus = conversation && typeof conversation === 'object' ? conversation : null;
+  state.webhooks = Array.isArray(webhooks) ? webhooks : [];
+  state.indexStatus = index && typeof index === 'object' ? index : {};
 }
 
 export async function saveVoiceCommands(commands = state.voiceCommands): Promise<void> {
@@ -597,10 +602,10 @@ export async function loadMemory(): Promise<void> {
     ),
     get<{ records: Array<Record<string, unknown>> }>('/memory/ambiguous'),
   ]);
-  state.memoryStats = stats;
-  state.memoryEntities = entities.entities || [];
-  state.memoryUnclassified = entities.unclassified || [];
-  state.memoryAmbiguous = ambiguous.records || [];
+  state.memoryStats = stats && typeof stats === 'object' ? stats : {};
+  state.memoryEntities = Array.isArray(entities?.entities) ? entities.entities : [];
+  state.memoryUnclassified = Array.isArray(entities?.unclassified) ? entities.unclassified : [];
+  state.memoryAmbiguous = Array.isArray(ambiguous?.records) ? ambiguous.records : [];
 }
 
 export async function clearMemory(): Promise<void> {

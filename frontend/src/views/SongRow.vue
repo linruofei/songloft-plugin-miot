@@ -11,6 +11,7 @@ const emit = defineEmits<{ play: [Song, number] }>();
 const coverSrc = ref('');
 let coverSlot: CoverSlot | null = null;
 let coverGeneration = 0;
+let coverTimer: ReturnType<typeof setTimeout> | null = null;
 
 function isCurrent() { return state.player.current_song?.id === props.song.id; }
 function duration(seconds?: number) {
@@ -25,6 +26,14 @@ function releaseCoverSlot(): void {
 }
 
 function loadCover(): void {
+  if (coverTimer) clearTimeout(coverTimer);
+  coverTimer = setTimeout(() => {
+    coverTimer = null;
+    loadCoverNow();
+  }, 220);
+}
+
+function loadCoverNow(): void {
   const generation = ++coverGeneration;
   releaseCoverSlot();
   coverSrc.value = '';
@@ -48,6 +57,7 @@ function failCoverLoad(): void {
 
 watch(() => [props.song.id, props.song.cover_url], loadCover, { immediate: true });
 onUnmounted(() => {
+  if (coverTimer) clearTimeout(coverTimer);
   coverGeneration += 1;
   releaseCoverSlot();
 });

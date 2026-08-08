@@ -117,12 +117,16 @@ function syncSourceDrafts(): void {
 
 syncSourceDrafts();
 
+let memoryLoadTimer: ReturnType<typeof setTimeout> | null = null;
 onMounted(async () => {
-  await Promise.all([loadVoiceData(), loadMemory(), loadSearchProviders()]);
+  await Promise.all([loadVoiceData(), loadSearchProviders()]);
   syncSourceDrafts();
   if (state.config.conversation_monitor_enabled) connectConversation();
+  // Let the voice settings shell paint before fetching potentially large memory data.
+  memoryLoadTimer = setTimeout(() => void loadMemory(), 350);
 });
 onUnmounted(() => {
+  if (memoryLoadTimer) clearTimeout(memoryLoadTimer);
   conversationSocket?.close();
   if (conversationPoll) clearInterval(conversationPoll);
 });

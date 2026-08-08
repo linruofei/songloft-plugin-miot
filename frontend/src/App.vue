@@ -6,7 +6,7 @@ import FullscreenPlayer from './views/FullscreenPlayer.vue';
 import Snackbar from './views/Snackbar.vue';
 import ConfirmDialog from './views/ConfirmDialog.vue';
 import { detectHostMode, installHostBack, navigation } from './runtime';
-import { disposeStore, initialize, loadMemory, loadSchedules, loadVoiceData, state } from './store';
+import { disposeStore, initialize, state } from './store';
 
 onMounted(() => {
   detectHostMode();
@@ -16,10 +16,7 @@ onMounted(() => {
 
 watch(
   () => navigation.page,
-  (page) => {
-    if (page === 'settings') {
-      void Promise.all([loadVoiceData(), loadSchedules(), loadMemory()]);
-    }
+  () => {
     navigation.playerPopup = '';
   },
 );

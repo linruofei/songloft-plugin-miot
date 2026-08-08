@@ -16,7 +16,8 @@ import type { SelectOption, Song } from '../types';
 
 const showDevicePicker = ref(false);
 const search = ref('');
-const songRenderLimit = ref(50);
+const songRenderLimit = ref(20);
+const songRenderBatchSize = 40;
 const playlistOptions = computed<SelectOption[]>(() => state.playlists.map((p) => ({ value: String(p.id), label: p.name, description: `${p.song_count ?? 0} 首歌曲` })));
 const renderedSongs = computed(() => visibleSongs.value.slice(0, songRenderLimit.value));
 const noServerHint = computed(() => !state.config.server_host || state.config.server_host_status === 'loopback');
@@ -45,12 +46,12 @@ function remeasureList(): void {
 }
 
 async function onPlaylist(value: string) { await selectPlaylist(value); }
-function resetSongRenderLimit(): void { songRenderLimit.value = 50; }
+function resetSongRenderLimit(): void { songRenderLimit.value = 20; }
 function loadMoreSongs(event: Event): void {
   const target = event.currentTarget as HTMLElement | null;
   if (!target || songRenderLimit.value >= visibleSongs.value.length) return;
   if (target.scrollTop + target.clientHeight >= target.scrollHeight - 160) {
-    songRenderLimit.value = Math.min(songRenderLimit.value + 50, visibleSongs.value.length);
+    songRenderLimit.value = Math.min(songRenderLimit.value + songRenderBatchSize, visibleSongs.value.length);
   }
 }
 function openDevicePicker() {
@@ -63,7 +64,7 @@ async function play(song: Song, index: number) {
 function notifyLocal(error: unknown) { console.warn('[miot] play failed', messageOf(error)); }
 function locateCurrentSong() {
   const currentIndex = visibleSongs.value.findIndex((song) => song.id === state.player.current_song?.id);
-  if (currentIndex >= songRenderLimit.value) songRenderLimit.value = Math.min(currentIndex + 50, visibleSongs.value.length);
+  if (currentIndex >= songRenderLimit.value) songRenderLimit.value = Math.min(currentIndex + songRenderBatchSize, visibleSongs.value.length);
   nextTick(() => document.querySelector('.song-row-current')?.scrollIntoView({ block: 'center' }));
 }
 watch(() => [state.selectedPlaylistId, state.songSearch], resetSongRenderLimit);
