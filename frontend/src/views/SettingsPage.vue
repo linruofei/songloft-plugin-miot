@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, onMounted, onUnmounted, ref } from 'vue';
 import AppBar from './AppBar.vue';
 import DeviceSettings from './settings/DeviceSettings.vue';
 import PlaybackSettings from './settings/PlaybackSettings.vue';
@@ -8,7 +8,7 @@ import ScheduleSettings from './settings/ScheduleSettings.vue';
 import ToolboxSettings from './settings/ToolboxSettings.vue';
 import SlIcon from '../ui/SlIcon.vue';
 import { closePage, navigation } from '../runtime';
-import { loadSchedules, loadVoiceData, state } from '../store';
+import { state } from '../store';
 
 const isNarrow = ref(typeof window !== 'undefined' && window.innerWidth < 600);
 const categories = [
@@ -25,21 +25,8 @@ function setCategory(id: string) { navigation.settingsCategory = id; }
 function close() { navigation.settingsCategory = ''; closePage(); }
 function back() { if (isNarrow.value && navigation.settingsCategory) navigation.settingsCategory = ''; else close(); }
 function updateWidth() { isNarrow.value = window.innerWidth < 600; }
-let categoryRequest: ReturnType<typeof setTimeout> | null = null;
-function loadCategoryData(categoryId: string): void {
-  if (categoryRequest) clearTimeout(categoryRequest);
-  if (categoryId === 'voice') {
-    void loadVoiceData();
-  } else if (categoryId === 'schedule') {
-    void loadSchedules();
-  }
-}
-watch(() => currentCategory.value.id, (categoryId) => loadCategoryData(categoryId), { immediate: true });
 onMounted(() => window.addEventListener('resize', updateWidth));
-onUnmounted(() => {
-  if (categoryRequest) clearTimeout(categoryRequest);
-  window.removeEventListener('resize', updateWidth);
-});
+onUnmounted(() => window.removeEventListener('resize', updateWidth));
 </script>
 
 <template>
