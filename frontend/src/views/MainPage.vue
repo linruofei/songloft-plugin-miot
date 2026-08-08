@@ -64,8 +64,16 @@ async function play(song: Song, index: number) {
 function notifyLocal(error: unknown) { console.warn('[miot] play failed', messageOf(error)); }
 function locateCurrentSong() {
   const currentIndex = visibleSongs.value.findIndex((song) => song.id === state.player.current_song?.id);
+  if (currentIndex < 0) return;
   if (currentIndex >= songRenderLimit.value) songRenderLimit.value = Math.min(currentIndex + songRenderBatchSize, visibleSongs.value.length);
-  nextTick(() => document.querySelector('.song-row-current')?.scrollIntoView({ block: 'center' }));
+  void nextTick(() => {
+    const list = document.querySelector<HTMLElement>('.sl-list-view');
+    const row = document.querySelector<HTMLElement>('.song-row-current');
+    if (!list || !row) return;
+    const listRect = list.getBoundingClientRect();
+    const rowRect = row.getBoundingClientRect();
+    list.scrollTop += rowRect.top - listRect.top - (list.clientHeight - rowRect.height) / 2;
+  });
 }
 watch(() => [state.selectedPlaylistId, state.songSearch], resetSongRenderLimit);
 watch(

@@ -195,10 +195,17 @@ export function resolveConfirm(value: boolean): void {
 
 export async function loadConfig(): Promise<void> {
   const config = await get<MiotConfig>('/config');
-  Object.assign(state.config, defaultConfig, config);
-  state.config.external_search_sources = [...(config.external_search_sources || [])];
-  state.config.extra_music_api_models = [...(config.extra_music_api_models || [])];
-  state.config.ai_config = { ...(config.ai_config || {}) };
+  // Normalize nullable fields before touching the reactive object. WebF can render
+  // between individual assignments, so never expose transient null arrays.
+  const normalized: MiotConfig = {
+    ...defaultConfig,
+    ...(config || {}),
+    suggested_addresses: Array.isArray(config?.suggested_addresses) ? config.suggested_addresses : [],
+    external_search_sources: Array.isArray(config?.external_search_sources) ? config.external_search_sources : [],
+    extra_music_api_models: Array.isArray(config?.extra_music_api_models) ? config.extra_music_api_models : [],
+    ai_config: config?.ai_config && typeof config.ai_config === 'object' ? { ...config.ai_config } : {},
+  };
+  Object.assign(state.config, normalized);
   state.configLoaded = true;
 }
 

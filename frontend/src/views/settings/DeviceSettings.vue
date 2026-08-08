@@ -35,7 +35,7 @@ const selectedMembers = ref<string[]>([]);
 let qrTimer: ReturnType<typeof setInterval> | null = null;
 
 const hostOptions = computed<SelectOption[]>(() => [
-  ...state.config.suggested_addresses.map((value) => ({ value, label: value })),
+  ...(Array.isArray(state.config.suggested_addresses) ? state.config.suggested_addresses : []).map((value) => ({ value, label: value })),
   { value: '__custom__', label: '自定义地址' },
 ]);
 const isCustomHost = computed(() => serverChoice.value === '__custom__');
@@ -43,7 +43,8 @@ const managed = computed(() => state.devices.flatMap((account) => account.device
 const accountStatuses = computed(() => state.accounts);
 
 onMounted(() => {
-  serverChoice.value = state.config.suggested_addresses.includes(state.config.server_host) ? state.config.server_host : (state.config.server_host ? '__custom__' : '');
+  const suggested = Array.isArray(state.config.suggested_addresses) ? state.config.suggested_addresses : [];
+  serverChoice.value = suggested.includes(state.config.server_host) ? state.config.server_host : (state.config.server_host ? '__custom__' : '');
   customHost.value = state.config.server_host;
   extraModels.value = state.config.extra_music_api_models.join(', ');
   void Promise.all([loadAccountsAndDevices(), loadGroups()]);
@@ -57,8 +58,9 @@ async function saveServerHost() {
   state.config.server_host_status = host.includes('localhost') || host.includes('127.0.0.1') ? 'loopback' : 'ok';
 }
 async function autoFill() {
-  if (state.config.suggested_addresses[0]) {
-    serverChoice.value = state.config.suggested_addresses[0];
+  const suggested = Array.isArray(state.config.suggested_addresses) ? state.config.suggested_addresses : [];
+  if (suggested[0]) {
+    serverChoice.value = suggested[0];
     customHost.value = serverChoice.value;
     notify('已填入检测到的局域网地址', 'info');
   } else notify('未检测到可用局域网地址', 'warning');

@@ -110,7 +110,7 @@ let conversationSocket: WebSocket | null = null;
 let conversationPoll: ReturnType<typeof setInterval> | null = null;
 
 function syncSourceDrafts(): void {
-  for (const source of state.config.external_search_sources) {
+  for (const source of Array.isArray(state.config.external_search_sources) ? state.config.external_search_sources : []) {
     sourceDrafts[source.id] = { ...source };
   }
 }
@@ -414,7 +414,7 @@ async function removeSource(id: string): Promise<void> {
 }
 
 async function saveSources(): Promise<void> {
-  const sources = state.config.external_search_sources.map((source) => ({
+  const sources = (Array.isArray(state.config.external_search_sources) ? state.config.external_search_sources : []).map((source) => ({
     ...(sourceDrafts[source.id] || source),
   }));
   await saveConfig({ external_search_sources: sources });
