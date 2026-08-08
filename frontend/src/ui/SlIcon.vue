@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 
+import { isWebFRuntime } from '../runtime';
+
 const props = defineProps<{ name: string; size?: number; playerIcon?: boolean }>();
 
 const playerIconCodePoints: Record<string, number> = {
@@ -12,7 +14,7 @@ const playerIconCodePoints: Record<string, number> = {
   favorite_border: 0xe25c,
   format_list_numbered: 0xf793,
   keyboard_arrow_down: 0xf82b,
-  looks_one_outlined: 0xf19e,
+  looks_one: 0xf19e,
   music_note: 0xf8ed,
   pause: 0xf0056,
   play_arrow: 0xf00a0,
@@ -31,11 +33,13 @@ const playerIconCodePoints: Record<string, number> = {
 };
 
 const playerGlyph = computed(() => {
-  const codePoint = props.playerIcon ? playerIconCodePoints[props.name] : undefined;
+  const codePoint = props.playerIcon && !isWebFRuntime
+    ? playerIconCodePoints[props.name]
+    : undefined;
   return codePoint === undefined ? props.name : String.fromCodePoint(codePoint);
 });
 const usesPlayerFont = computed(
-  () => props.playerIcon && playerIconCodePoints[props.name] !== undefined,
+  () => props.playerIcon && !isWebFRuntime && playerIconCodePoints[props.name] !== undefined,
 );
 </script>
 

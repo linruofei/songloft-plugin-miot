@@ -7,7 +7,11 @@ import SlSlider from '../ui/SlSlider.vue';
 const props = defineProps<{ modelValue: number; popupId: string; disabled?: boolean }>();
 const emit = defineEmits<{ change: [number] }>();
 
-const localVolume = ref(props.modelValue);
+function clampVolume(value: number): number {
+  return Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : 0;
+}
+
+const localVolume = ref(clampVolume(props.modelValue));
 const previousVolume = ref(50);
 const open = computed(() => navigation.playerPopup === props.popupId);
 const icon = computed(() => {
@@ -17,14 +21,14 @@ const icon = computed(() => {
   return 'volume_up';
 });
 
-watch(() => props.modelValue, (value) => { localVolume.value = value; });
+watch(() => props.modelValue, (value) => { localVolume.value = clampVolume(value); });
 
 function toggle(): void {
   navigation.playerPopup = open.value ? '' : props.popupId;
 }
 
 function update(value: number): void {
-  localVolume.value = Math.max(0, Math.min(100, value));
+  localVolume.value = clampVolume(value);
 }
 
 function commit(value: number): void {

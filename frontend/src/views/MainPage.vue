@@ -9,6 +9,7 @@ import SlIcon from '../ui/SlIcon.vue';
 import SlInput from '../ui/SlInput.vue';
 import SlListView from '../ui/SlListView.vue';
 import SlSelect from '../ui/SlSelect.vue';
+import { openSelect } from '../ui/selectState';
 import { navigation, openPage } from '../runtime';
 import { currentDevice, deviceName, messageOf, playSong, refreshAll, selectPlaylist, state, visibleSongs } from '../store';
 import type { SelectOption, Song } from '../types';
@@ -42,6 +43,10 @@ function remeasureList(): void {
 }
 
 async function onPlaylist(value: string) { await selectPlaylist(value); }
+function openDevicePicker() {
+  openSelect.value = null;
+  showDevicePicker.value = true;
+}
 async function play(song: Song, index: number) {
   try { await playSong(song, index); } catch (error) { /* store already presents the error */ notifyLocal(error); }
 }
@@ -69,7 +74,7 @@ onUnmounted(() => {
   <div class="miot-main-appbar">
     <div class="miot-main-appbar-inner">
       <AppBar title="MIoT 智能音箱" :subtitle="currentDevice ? `${deviceName(currentDevice)} · ${state.player.is_playing ? '播放中' : '待机'}` : '请选择播放设备'">
-        <SlButton variant="icon" icon="speaker_group" title="选择设备" @click="showDevicePicker = true" />
+        <SlButton variant="icon" icon="speaker_group" title="选择设备" @click="openDevicePicker" />
         <SlButton variant="icon" icon="refresh" title="刷新" :disabled="state.refreshing" @click="refreshAll" />
         <SlButton variant="icon" icon="settings" title="设置" @click="openPage('settings')" />
       </AppBar>

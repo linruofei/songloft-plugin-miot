@@ -36,6 +36,7 @@ onUnmounted(() => window.removeEventListener('resize', updateWidth));
         <AppBar :title="appbarTitle" back @back="back" />
       </div>
     </div>
+    <div class="settings-scroll-body">
     <div class="settings-shell">
       <div v-if="showMobileMenu" class="settings-mobile-menu">
         <button v-for="category in categories" :key="category.id" class="settings-nav-item" @click="setCategory(category.id)"><span class="settings-nav-icon"><SlIcon :name="category.icon" :size="20" /></span><span class="settings-nav-copy"><strong class="settings-nav-title">{{ category.title }}</strong><small class="settings-nav-subtitle">{{ category.subtitle }}</small></span><SlIcon name="chevron_right" :size="20" /></button>
@@ -49,6 +50,7 @@ onUnmounted(() => window.removeEventListener('resize', updateWidth));
           <component :is="currentCategory.component" />
         </section>
       </div>
+    </div>
     </div>
   </div>
 </template>

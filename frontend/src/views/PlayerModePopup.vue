@@ -13,7 +13,7 @@ const modes: Array<{ value: PlayMode; label: string; icon: string }> = [
   { value: 'loop', label: '列表循环', icon: 'repeat' },
   { value: 'single', label: '单曲循环', icon: 'repeat_one' },
   { value: 'random', label: '随机播放', icon: 'shuffle' },
-  { value: 'singlePlay', label: '单曲播放', icon: 'looks_one_outlined' },
+  { value: 'singlePlay', label: '单曲播放', icon: 'looks_one' },
 ];
 const current = computed(() => modes.find((mode) => mode.value === props.modelValue) || modes[0]);
 const open = computed(() => navigation.playerPopup === props.popupId);

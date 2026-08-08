@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { songCoverUrl } from '../covers';
 import PlayerModePopup from './PlayerModePopup.vue';
 import PlayerProgress from './PlayerProgress.vue';
@@ -27,6 +27,8 @@ const mobileLyrics = ref<HTMLElement | null>(null);
 let touchStartX = 0;
 let touchStartY = 0;
 let touchStartPage = 0;
+let mobileScrollTimer = 0;
+let mobileSettledPage = 0;
 const activeLyric = computed(() => {
   const position = Number(state.player.position || 0);
   let index = -1;
@@ -166,18 +168,28 @@ function close(): void {
 function syncMobilePage(): void {
   const pager = mobilePager.value;
   if (!pager || pager.clientWidth <= 0) return;
-  mobilePage.value = Math.max(0, Math.min(1, Math.round(pager.scrollLeft / pager.clientWidth)));
+  const ratio = Math.max(0, Math.min(1, pager.scrollLeft / pager.clientWidth));
+  const page = mobileSettledPage === 0
+    ? (ratio >= 0.12 ? 1 : 0)
+    : (ratio <= 0.88 ? 0 : 1);
+  window.clearTimeout(mobileScrollTimer);
+  mobileScrollTimer = window.setTimeout(() => {
+    const currentPager = mobilePager.value;
+    if (!currentPager || currentPager.clientWidth <= 0) return;
+    mobileSettledPage = page;
+    mobilePage.value = page;
+    const target = currentPager.clientWidth * page;
+    if (Math.abs(currentPager.scrollLeft - target) > 1) currentPager.scrollLeft = target;
+  }, 120);
 }
 
 function showMobilePage(index: number): void {
   const pager = mobilePager.value;
+  mobileSettledPage = index;
   mobilePage.value = index;
   if (!pager) return;
-  try {
-    pager.scrollTo({ left: pager.clientWidth * index, behavior: 'smooth' });
-  } catch {
-    pager.scrollLeft = pager.clientWidth * index;
-  }
+  window.clearTimeout(mobileScrollTimer);
+  pager.scrollLeft = pager.clientWidth * index;
 }
 
 function startMobileSwipe(event: TouchEvent): void {
@@ -219,6 +231,7 @@ onMounted(() => {
   void loadSongDetails();
   void loadSleepTimer();
 });
+onUnmounted(() => window.clearTimeout(mobileScrollTimer));
 watch(() => state.player.current_song?.id, loadSongDetails);
 watch(() => [state.currentAccountId, state.currentDeviceId], loadSleepTimer);
 watch(
@@ -280,14 +293,14 @@ watch(activeLyric, centerActiveLyric);
               <button type="button" :class="{ active: mobilePage === 0 }" aria-label="显示封面" @click="showMobilePage(0)"></button>
               <button type="button" :class="{ active: mobilePage === 1 }" aria-label="显示歌词" @click="showMobilePage(1)"></button>
             </div>
-            <div class="fullscreen-song-meta fullscreen-song-meta-mobile">
-              <span class="fullscreen-song-title">{{ state.player.current_song?.title || '暂无播放' }}</span>
-              <span class="fullscreen-song-artist">{{ state.player.current_song?.artist || '选择一首歌曲开始播放' }}</span>
-            </div>
           </div>
         </div>
 
         <div class="fullscreen-playback">
+          <div class="fullscreen-song-meta fullscreen-song-meta-mobile">
+            <span class="fullscreen-song-title">{{ state.player.current_song?.title || '暂无播放' }}</span>
+            <span class="fullscreen-song-artist">{{ state.player.current_song?.artist || '选择一首歌曲开始播放' }}</span>
+          </div>
           <PlayerProgress
             :position="Number(state.player.position || 0)"
             :duration="Number(state.player.duration || 0)"

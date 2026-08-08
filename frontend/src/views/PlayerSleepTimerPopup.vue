@@ -45,8 +45,8 @@ function toggle(): void {
     navigation.playerPopup = '';
     return;
   }
-  emit('refresh');
   navigation.playerPopup = props.popupId;
+  emit('refresh');
 }
 
 function choose(mode: 'time' | 'songs', value: number): void {
