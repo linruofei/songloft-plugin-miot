@@ -62,7 +62,7 @@ h1, h2, h3, p { margin: 0; }
 .app-state-page h2 { color: var(--md-on-surface); font-size: 20px; margin-bottom: 8px; font-weight: 500; }
 .app-state-page p { max-width: 560px; margin: 0 auto 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .loading-spinner { display: inline-block; width: 28px; height: 28px; border: 3px solid var(--md-outline-variant); border-top-color: var(--md-primary); border-radius: 50%; animation: spin .8s linear infinite; }
-@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes spin { to { opacity: .45; } }
 
 .miot-page { max-width: var(--miot-content-width); margin: 0 auto; padding: calc(72px + var(--sl-safe-top, 0px)) 20px calc(32px + var(--sl-safe-bottom, 0px)); }
 .miot-page.miot-page-with-player { padding-bottom: 0; }
@@ -123,7 +123,7 @@ h1, h2, h3, p { margin: 0; }
 .switch-track { position: absolute; inset: 0; border: 2px solid var(--md-outline); border-radius: 16px; background: var(--md-surface-variant); transition: all .2s; }
 .switch-thumb { position: absolute; top: 6px; left: 6px; width: 20px; height: 20px; border-radius: 50%; background: var(--md-outline); transition: all .2s; }
 .switch input:checked ~ .switch-track { border-color: var(--md-primary); background: var(--md-primary); }
-.switch input:checked ~ .switch-thumb { transform: translateX(20px); background: var(--md-on-primary); }
+.switch input:checked ~ .switch-thumb { left: 26px; background: var(--md-on-primary); }
 .sl-slider, .sl-slider-native { width: 100%; }
 .sl-slider { accent-color: var(--md-primary); }
 .sl-list-view { display: block; width: 100%; height: var(--miot-list-height); }
@@ -202,7 +202,7 @@ h1, h2, h3, p { margin: 0; }
 .player-seek-shell { position: relative; height: 28px; display: flex; align-items: center; }
 .player-seek-track { position: absolute; right: 6px; left: 6px; height: 4px; overflow: hidden; border-radius: 2px; background: var(--md-surface-container-highest); }
 .player-seek-active { height: 100%; background: var(--md-primary); }
-.player-seek-thumb { position: absolute; top: 50%; width: 12px; height: 12px; border-radius: 50%; background: var(--md-primary); transform: translate(-50%, -50%); pointer-events: none; }
+.player-seek-thumb { position: absolute; top: calc(50% - 6px); width: 12px; height: 12px; border-radius: 50%; background: var(--md-primary); pointer-events: none; }
 .player-seek-input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
 .player-seek-input:disabled { cursor: default; }
 
