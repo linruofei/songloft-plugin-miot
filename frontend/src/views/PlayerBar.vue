@@ -2,10 +2,9 @@
 import { computed, ref, watch } from 'vue';
 import { songCoverUrl } from '../covers';
 import { openPage } from '../runtime';
-import { currentDevice, playerCommand, setPlayMode, state } from '../store';
+import { currentDevice, playerCommand, state } from '../store';
 import SlButton from '../ui/SlButton.vue';
 import SlIcon from '../ui/SlIcon.vue';
-import PlayerModePopup from './PlayerModePopup.vue';
 import PlayerProgress from './PlayerProgress.vue';
 
 const coverFailed = ref(false);
@@ -36,13 +35,6 @@ function openPlayer(): void {
         <span class="player-subtitle">{{ state.player.current_song?.artist || currentDevice.name || '已选择设备' }}</span>
       </div>
       <div class="player-controls" @click.stop>
-        <PlayerModePopup
-          class="mini-mode-control"
-          :model-value="state.player.play_mode || 'order'"
-          popup-id="mini-mode"
-          :disabled="state.playerBusy"
-          @change="setPlayMode"
-        />
         <SlButton variant="icon" icon="skip_previous" player-icon class="player-control-button" title="上一首" :disabled="state.playerBusy" @click="playerCommand('/player/previous')" />
         <SlButton
           class="mini-play-control"
@@ -54,7 +46,6 @@ function openPlayer(): void {
           @click="playerCommand('/player/toggle')"
         />
         <SlButton variant="icon" icon="skip_next" player-icon class="player-control-button" title="下一首" :disabled="state.playerBusy" @click="playerCommand('/player/next')" />
-        <SlButton class="mini-stop-control player-tool-button" variant="icon" icon="stop" player-icon title="停止播放" :disabled="state.playerBusy" @click="playerCommand('/player/stop')" />
       </div>
     </div>
   </div>

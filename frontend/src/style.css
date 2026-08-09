@@ -124,9 +124,10 @@ html.webf-engine .miot-app * { transform-origin: 0 0; }
 .switch { position: relative; display: inline-block; width: 52px; height: 32px; cursor: pointer; flex-shrink: 0; }
 .switch input { width: 0; height: 0; opacity: 0; }
 .switch-track { position: absolute; inset: 0; border: 2px solid var(--md-outline); border-radius: 16px; background: var(--md-surface-variant); transition: all .2s; }
-.switch-thumb { position: absolute; top: 6px; left: 6px; width: 20px; height: 20px; border-radius: 50%; background: var(--md-outline); transition: all .2s; }
+.switch-track::after { content: ''; position: absolute; top: 4px; left: 4px; width: 20px; height: 20px; border-radius: 50%; background: var(--md-outline); transition: transform .2s, background .2s; }
+.switch-thumb { display: none; }
 .switch input:checked ~ .switch-track { border-color: var(--md-primary); background: var(--md-primary); }
-.switch input:checked ~ .switch-thumb { left: auto; right: 6px; background: var(--md-on-primary); }
+.switch input:checked ~ .switch-track::after { background: var(--md-on-primary); transform: translateX(20px); }
 .sl-slider, .sl-slider-native { width: 100%; }
 .sl-slider { accent-color: var(--md-primary); }
 .sl-list-view { display: block; width: 100%; height: var(--miot-list-height); }
@@ -160,7 +161,6 @@ html.webf-engine .miot-app * { transform-origin: 0 0; }
 .player-controls { display: flex; align-items: center; gap: 0; }
 .player-controls .sl-button-icon { width: 36px; height: 40px; min-height: 40px; }
 .mini-play-control.sl-button-icon { width: 44px; height: 44px; color: var(--md-primary); }
-.mini-stop-control { display: none; }
 .player-control-active { color: var(--md-primary); }
 .player-favorite-button.player-control-active { color: #f44336; }
 .player-favorite-button.player-control-active .sl-icon { font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
@@ -213,10 +213,10 @@ html.webf-engine .player-sleep-popup { left: calc(50% - 140px); transform: none;
 .player-seek-input:disabled { cursor: default; }
 
 .page-view { min-height: 100vh; background: var(--md-surface); }
-.settings-page { min-height: 100vh; background: var(--md-surface); }
-.settings-scroll-body { min-height: calc(100vh - 56px); margin-top: 56px; overflow: visible; }
-.settings-shell { min-height: 100%; padding: 16px 20px calc(28px + var(--sl-safe-bottom, 0px)); }
-.settings-layout { max-width: 1200px; min-height: calc(100vh - 40px); margin: 0 auto; display: flex; align-items: flex-start; gap: 0; }
+.settings-page { height: 100dvh; min-height: 0; padding-top: 56px; overflow: hidden; background: var(--md-surface); }
+.settings-scroll-body { height: calc(100dvh - 56px); min-height: 0; overflow-y: auto; scrollbar-width: none; }
+.settings-scroll-body::-webkit-scrollbar { display: none; }
+.settings-layout { max-width: 1200px; min-height: 0; margin: 0 auto; display: flex; align-items: flex-start; gap: 0; }
 .settings-nav { position: sticky; top: 0; width: var(--miot-nav-width); height: calc(100vh - 56px); flex: 0 0 var(--miot-nav-width); overflow: hidden; padding: 8px; border-right: 1px solid var(--md-outline-variant); }
 .settings-nav-item { width: 100%; min-height: 60px; display: flex; align-items: center; gap: 12px; margin-bottom: 4px; padding: 10px 16px; border: 0; border-radius: var(--md-radius-md); background: transparent; color: var(--md-on-surface); text-align: left; }
 .settings-nav-item:hover { background: var(--md-surface-container-high); }
@@ -239,6 +239,7 @@ html.webf-engine .player-sleep-popup { left: calc(50% - 140px); transform: none;
 .settings-mobile-menu { max-width: 560px; margin: 0 auto; }
 .settings-mobile-menu > .settings-nav-item { margin: 0 0 8px; }
 .miot-section { margin-bottom: 24px; }
+.settings-content > .miot-section:last-child { margin-bottom: 0; }
 .miot-section .section-title { margin-bottom: 8px; padding-left: 10px; color: var(--md-on-surface-variant); font-size: 12px; font-weight: 500; letter-spacing: 0; }
 .card { background: var(--md-surface-container); border: 1px solid var(--md-outline-variant); border-radius: var(--md-radius-lg); padding: 20px; margin-bottom: 16px; box-shadow: none; }
 .card.miot-card { width: 100%; max-width: 100%; padding: 0; overflow: visible; }
@@ -409,8 +410,6 @@ html.webf-engine .player-sleep-popup { left: calc(50% - 140px); transform: none;
 @media (max-width: 599px) {
   .player-mode-popup { width: 140px; }
   .player-mode-option { height: 44px; min-height: 44px; }
-  .mini-mode-control { display: none; }
-  .mini-stop-control.sl-button { display: inline-flex; }
   .fullscreen-inner { max-width: none; padding-right: 0; padding-left: 0; }
   .fullscreen-layout { padding-bottom: calc(228px + var(--sl-safe-bottom, 0px)); }
   .fullscreen-stage { flex: 1 1 0%; padding-top: 6px; }
@@ -434,7 +433,7 @@ html.webf-engine .player-sleep-popup { left: calc(50% - 140px); transform: none;
   .fullscreen-tool-desktop { display: none; }
   .fullscreen-tools { width: 168px; min-height: 40px; margin-top: 4px; }
   .fullscreen-tools > .player-popup-anchor, .fullscreen-tools > .sl-button-icon { width: 40px; height: 40px; }
-  .settings-shell { padding: 8px 12px calc(28px + var(--sl-safe-bottom, 0px)); }
+  .settings-shell { padding: 24px 12px calc(28px + var(--sl-safe-bottom, 0px)); }
   .settings-layout { display: block; }
   .settings-nav { display: none; }
   .settings-content { max-width: none; padding-left: 0; }
