@@ -59,6 +59,7 @@ function toggleMute(): void {
             :model-value="localVolume"
             :min="0"
             :max="100"
+            orientation="vertical"
             aria-label="设备音量"
             @update:model-value="update"
             @change="commit"

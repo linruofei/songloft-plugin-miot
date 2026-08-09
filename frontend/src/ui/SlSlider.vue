@@ -4,8 +4,16 @@ import { useNativeSlider } from '../runtime';
 import { bindNativeProps } from './nativeProps';
 
 const props = withDefaults(
-  defineProps<{ modelValue: number; min?: number; max?: number; step?: number; disabled?: boolean; ariaLabel?: string }>(),
-  { min: 0, max: 100, step: 1 },
+  defineProps<{
+    modelValue: number;
+    min?: number;
+    max?: number;
+    step?: number;
+    disabled?: boolean;
+    ariaLabel?: string;
+    orientation?: 'horizontal' | 'vertical';
+  }>(),
+  { min: 0, max: 100, step: 1, orientation: 'horizontal' },
 );
 const emit = defineEmits<{ 'update:modelValue': [number]; change: [number] }>();
 const native = ref<HTMLElement | null>(null);
@@ -15,6 +23,7 @@ bindNativeProps(native, () => ({
   max: props.max,
   step: props.step,
   disabled: !!props.disabled,
+  orientation: props.orientation,
 }));
 
 function valueFrom(event: Event): number {

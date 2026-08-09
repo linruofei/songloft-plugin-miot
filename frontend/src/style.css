@@ -29,6 +29,9 @@ button { cursor: pointer; }
 button:disabled, input:disabled, select:disabled { cursor: default; opacity: .55; }
 h1, h2, h3, p { margin: 0; }
 
+html.webf-engine .miot-app,
+html.webf-engine .miot-app * { transform-origin: 0 0; }
+
 .material-symbols-outlined {
   font-family: 'Material Symbols Outlined';
   font-weight: normal;
@@ -123,7 +126,7 @@ h1, h2, h3, p { margin: 0; }
 .switch-track { position: absolute; inset: 0; border: 2px solid var(--md-outline); border-radius: 16px; background: var(--md-surface-variant); transition: all .2s; }
 .switch-thumb { position: absolute; top: 6px; left: 6px; width: 20px; height: 20px; border-radius: 50%; background: var(--md-outline); transition: all .2s; }
 .switch input:checked ~ .switch-track { border-color: var(--md-primary); background: var(--md-primary); }
-.switch input:checked ~ .switch-thumb { left: 26px; background: var(--md-on-primary); }
+.switch input:checked ~ .switch-thumb { left: auto; right: 6px; background: var(--md-on-primary); }
 .sl-slider, .sl-slider-native { width: 100%; }
 .sl-slider { accent-color: var(--md-primary); }
 .sl-list-view { display: block; width: 100%; height: var(--miot-list-height); }
@@ -182,6 +185,9 @@ h1, h2, h3, p { margin: 0; }
 .player-volume-slider-shell { width: 44px; min-height: 104px; flex: 1; display: flex; align-items: center; justify-content: center; overflow: visible; }
 .player-volume-slider { width: 112px; flex: 0 0 112px; transform: rotate(-90deg); }
 .player-sleep-popup { width: 280px; max-width: calc(100vw - 32px); max-height: calc(100vh - 96px); overflow-y: auto; transform: translateX(-50%); }
+html.webf-engine .player-volume-popup { left: calc(50% - 32px); transform: none; }
+html.webf-engine .player-volume-slider { width: 28px; height: 112px; transform: none; }
+html.webf-engine .player-sleep-popup { left: calc(50% - 140px); transform: none; }
 .sleep-timer-status { min-height: 48px; display: flex; align-items: center; gap: 8px; padding: 8px 8px 8px 16px; color: var(--md-primary); font-size: 14px; font-weight: 500; }
 .sleep-timer-status > span:not(.sl-icon) { min-width: 0; flex: 1; }
 .sleep-timer-status > button { min-height: 32px; padding: 0 10px; border: 0; background: transparent; color: var(--md-error); font-size: 13px; }
@@ -209,9 +215,9 @@ h1, h2, h3, p { margin: 0; }
 .page-view { min-height: 100vh; background: var(--md-surface); }
 .settings-page { min-height: 100vh; background: var(--md-surface); }
 .settings-scroll-body { min-height: calc(100vh - 56px); margin-top: 56px; overflow: visible; }
-.settings-shell { min-height: 100%; padding: calc(72px + var(--sl-safe-top, 0px)) 20px calc(28px + var(--sl-safe-bottom, 0px)); }
+.settings-shell { min-height: 100%; padding: 16px 20px calc(28px + var(--sl-safe-bottom, 0px)); }
 .settings-layout { max-width: 1200px; min-height: calc(100vh - 40px); margin: 0 auto; display: flex; align-items: flex-start; gap: 0; }
-.settings-nav { width: var(--miot-nav-width); flex: 0 0 var(--miot-nav-width); padding: 8px; border-right: 1px solid var(--md-outline-variant); }
+.settings-nav { position: sticky; top: 0; width: var(--miot-nav-width); height: calc(100vh - 56px); flex: 0 0 var(--miot-nav-width); overflow: hidden; padding: 8px; border-right: 1px solid var(--md-outline-variant); }
 .settings-nav-item { width: 100%; min-height: 60px; display: flex; align-items: center; gap: 12px; margin-bottom: 4px; padding: 10px 16px; border: 0; border-radius: var(--md-radius-md); background: transparent; color: var(--md-on-surface); text-align: left; }
 .settings-nav-item:hover { background: var(--md-surface-container-high); }
 .settings-nav-item.active { background: var(--md-secondary-container); color: var(--md-on-secondary-container); }
@@ -428,7 +434,7 @@ h1, h2, h3, p { margin: 0; }
   .fullscreen-tool-desktop { display: none; }
   .fullscreen-tools { width: 168px; min-height: 40px; margin-top: 4px; }
   .fullscreen-tools > .player-popup-anchor, .fullscreen-tools > .sl-button-icon { width: 40px; height: 40px; }
-  .settings-shell { padding-left: 12px; padding-right: 12px; }
+  .settings-shell { padding: 8px 12px calc(28px + var(--sl-safe-bottom, 0px)); }
   .settings-layout { display: block; }
   .settings-nav { display: none; }
   .settings-content { max-width: none; padding-left: 0; }
