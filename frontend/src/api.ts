@@ -27,11 +27,8 @@ async function browserRequest<T>(
     },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  const payload = (await response.json()) as ApiEnvelope<T>;
-  if (!response.ok) {
-    throw new ApiError(payload.error || `请求失败 (${response.status})`, response.status);
-  }
-  return unwrap(payload);
+  const payload = await response.json();
+  return decodePayload<T>(payload, response.status, response.ok);
 }
 
 async function browserEnvelope<T>(
@@ -56,22 +53,35 @@ async function browserEnvelope<T>(
 }
 
 export function unwrap<T>(value: unknown): T {
+  return decodePayload<T>(value, 0, true);
+}
+
+function decodePayload<T>(value: unknown, status: number, ok: boolean): T {
   const payload = value as Partial<ApiEnvelope<T>> | null;
-  if (!payload || payload.success !== true) {
-    throw new ApiError(payload?.error || '请求失败，请稍后重试');
+  if (payload && typeof payload === 'object' && 'success' in payload) {
+    if (payload.success === true) {
+      return payload.data as T;
+    }
+    throw new ApiError(payload.error || '请求失败，请稍后重试', status);
   }
-  return payload.data as T;
+  if (!ok) {
+    const detail = (payload as { error?: string; message?: string } | null)?.error
+      || (payload as { error?: string; message?: string } | null)?.message
+      || `请求失败 (${status})`;
+    throw new ApiError(detail, status);
+  }
+  return value as T;
 }
 
 export async function get<T>(path: string): Promise<T> {
   const api = pluginApi();
-  if (api?.apiGet) return unwrap<T>(await api.apiGet(path));
+  if (api?.apiGet) return decodePayload<T>(await api.apiGet(path), 0, true);
   return browserRequest<T>('GET', path);
 }
 
 export async function post<T>(path: string, body: unknown = {}): Promise<T> {
   const api = pluginApi();
-  if (api?.apiPost) return unwrap<T>(await api.apiPost(path, body));
+  if (api?.apiPost) return decodePayload<T>(await api.apiPost(path, body), 0, true);
   return browserRequest<T>('POST', path, body);
 }
 
@@ -89,7 +99,7 @@ export async function postEnvelope<T>(path: string, body: unknown = {}): Promise
 
 export async function del<T>(path: string): Promise<T> {
   const api = pluginApi();
-  if (api?.apiDelete) return unwrap<T>(await api.apiDelete(path));
+  if (api?.apiDelete) return decodePayload<T>(await api.apiDelete(path), 0, true);
   return browserRequest<T>('DELETE', path);
 }
 

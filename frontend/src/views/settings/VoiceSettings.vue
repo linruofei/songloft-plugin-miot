@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, reactive, ref } from 'vue';
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue';
 import SectionCard from '../../ui/SectionCard.vue';
 import SettingRow from '../../ui/SettingRow.vue';
 import SlButton from '../../ui/SlButton.vue';
@@ -101,10 +101,16 @@ const aiTestResult = ref('');
 const aiTestBusy = ref(false);
 const sourceTestQuery = ref('');
 const sourceTestResult = ref('');
+const selectedProviderId = ref('');
 const newSourceName = ref('');
 const newSourceUrl = ref('');
 const newSourceToken = ref('');
 const sourceDrafts = reactive<Record<string, SearchSource>>({});
+const voiceCommandsExpanded = ref(false);
+const conversationMessagesExpanded = ref(false);
+const memoryExpanded = ref(false);
+const memoryLoaded = ref(false);
+const memoryLoading = ref(false);
 const expandedMemory = ref<string | null>(null);
 let conversationSocket: WebSocket | null = null;
 let conversationPoll: ReturnType<typeof setInterval> | null = null;
@@ -115,18 +121,36 @@ function syncSourceDrafts(): void {
   }
 }
 
+function providerKey(provider: { id?: string; entry_path?: string; entryPath?: string; name: string }): string {
+  return String(provider.id || provider.entry_path || provider.entryPath || provider.name);
+}
+
+function fillSourceFromProvider(providerId: string): void {
+  const provider = state.searchProviders.find((item) => providerKey(item) === providerId);
+  if (!provider) return;
+  selectedProviderId.value = providerId;
+  newSourceName.value = provider.name;
+  newSourceUrl.value = provider.url || provider.search_path || provider.searchPath || '/api/search/topone';
+}
+
+const selectableSearchProviders = computed(() => state.searchProviders);
+
+const searchProviderOptions = computed(() =>
+  selectableSearchProviders.value.map((provider) => ({
+    value: providerKey(provider),
+    label: provider.name,
+  })),
+);
+
 syncSourceDrafts();
 
-let memoryLoadTimer: ReturnType<typeof setTimeout> | null = null;
 onMounted(async () => {
   await Promise.all([loadVoiceData(), loadSearchProviders()]);
   syncSourceDrafts();
+  if (selectableSearchProviders.value.length) fillSourceFromProvider(providerKey(selectableSearchProviders.value[0]));
   if (state.config.conversation_monitor_enabled) connectConversation();
-  // Let the voice settings shell paint before fetching potentially large memory data.
-  memoryLoadTimer = setTimeout(() => void loadMemory(), 350);
 });
 onUnmounted(() => {
-  if (memoryLoadTimer) clearTimeout(memoryLoadTimer);
   conversationSocket?.close();
   if (conversationPoll) clearInterval(conversationPoll);
 });
@@ -268,7 +292,7 @@ async function saveNumber(
   if (key === 'voice_memory_max_records') maxMemory.value = String(value);
   try {
     await saveConfig({ [key]: value });
-    if (key === 'voice_memory_max_records') await loadMemory();
+    if (key === 'voice_memory_max_records' && memoryExpanded.value) await ensureMemoryLoaded(true);
   } catch { /* saveConfig presents the error */ }
 }
 
@@ -313,6 +337,25 @@ function disconnectConversation(): void {
 async function refreshConversation(): Promise<void> {
   await loadConversationMessages();
   notify('对话记录已刷新', 'success');
+}
+
+async function ensureMemoryLoaded(force = false): Promise<void> {
+  if (memoryLoading.value) return;
+  if (!force && memoryLoaded.value) return;
+  memoryLoading.value = true;
+  try {
+    await loadMemory();
+    memoryLoaded.value = true;
+  } finally {
+    memoryLoading.value = false;
+  }
+}
+
+async function toggleMemoryExpanded(): Promise<void> {
+  memoryExpanded.value = !memoryExpanded.value;
+  if (memoryExpanded.value) {
+    await ensureMemoryLoaded();
+  }
 }
 
 async function addHook(): Promise<void> {
@@ -446,6 +489,13 @@ async function testSource(): Promise<void> {
   }
 }
 
+async function refreshSearchProviders(): Promise<void> {
+  await loadSearchProviders();
+  if (selectedProviderId.value && !selectableSearchProviders.value.some((provider) => providerKey(provider) === selectedProviderId.value)) {
+    selectedProviderId.value = '';
+  }
+}
+
 function memoryAliases(entity: MemoryEntity): Array<{ id?: string; query?: string; alias?: string }> {
   return entity.aliases || entity.records || [];
 }
@@ -454,7 +504,7 @@ async function deleteMemoryEntity(key: string, title: string): Promise<void> {
   if (!(await confirmAction('删除语音记忆', `确定删除“${title}”的全部记忆吗？`, '删除', true))) return;
   try {
     await del(`/memory/entity?canonicalKey=${encodeURIComponent(key)}`);
-    await loadMemory();
+    await ensureMemoryLoaded(true);
   } catch (error) {
     notify(messageOf(error), 'error');
   }
@@ -464,7 +514,7 @@ async function deleteMemoryRecord(id?: string): Promise<void> {
   if (!id) return;
   try {
     await del(`/memory?id=${encodeURIComponent(id)}`);
-    await loadMemory();
+    await ensureMemoryLoaded(true);
   } catch (error) {
     notify(messageOf(error), 'error');
   }
@@ -486,11 +536,20 @@ async function deleteMemoryRecord(id?: string): Promise<void> {
       </div>
       <div class="field-actions"><SlButton variant="text" label="刷新记录" icon="refresh" @click="refreshConversation" /></div>
     </div>
-    <div class="sub-panel">
-      <div v-for="item in state.conversationMessages" :key="String(item.id || item.timestamp)" class="list-item">
-        <div class="list-item-copy"><strong class="list-item-title">{{ item.query || item.text || '未识别内容' }}</strong><span class="list-item-subtitle">{{ item.device_name || item.device_id || '设备' }} · {{ item.answer || '暂无回复' }}</span></div>
+    <div class="form-body">
+      <button type="button" class="advanced-toggle" @click="conversationMessagesExpanded = !conversationMessagesExpanded">
+        <span>{{ conversationMessagesExpanded ? '收起最近对话记录' : '展开最近对话记录' }}</span>
+        <SlIcon :name="conversationMessagesExpanded ? 'expand_less' : 'expand_more'" :size="20" />
+      </button>
+      <div v-if="conversationMessagesExpanded" class="sub-panel">
+        <div v-for="item in state.conversationMessages" :key="String(item.id || item.timestamp)" class="list-item">
+          <div class="list-item-copy"><strong class="list-item-title">{{ item.query || item.text || '未识别内容' }}</strong><span class="list-item-subtitle">{{ item.device_name || item.device_id || '设备' }} · {{ item.answer || '暂无回复' }}</span></div>
+        </div>
+        <div v-if="!state.conversationMessages.length" class="empty-state">暂无对话记录</div>
       </div>
-      <div v-if="!state.conversationMessages.length" class="empty-state">暂无对话记录</div>
+      <div v-else class="collapsed-summary">
+        <span class="chip">{{ state.conversationMessages.length }} 条最近对话记录</span>
+      </div>
     </div>
     <div class="form-body">
       <h3 class="card-title">Webhook 回调</h3>
@@ -512,27 +571,36 @@ async function deleteMemoryRecord(id?: string): Promise<void> {
       <SlSwitch :model-value="state.config.voice_command_enabled" :disabled="!state.config.conversation_monitor_enabled" @update:model-value="setVoiceEnabled" />
     </SettingRow>
     <div v-if="!state.config.conversation_monitor_enabled" class="dependency-hint"><SlIcon name="warning" :size="18" /><span>需要先开启“对话监听”才能使用语音口令。</span></div>
-    <div class="form-body voice-command-list">
-      <div v-for="(command, index) in state.voiceCommands" :key="commandKey(command, index)" class="voice-command-group">
-        <div class="voice-command-header">
-          <SlIcon :name="commandIcons[command.type] || 'label'" :size="20" />
-          <strong>{{ commandLabels[command.type] || command.type }}</strong>
-          <span v-if="command.param" class="command-param">{{ parameterLabels[command.param] || command.param }}</span>
-          <SlSwitch :model-value="command.enabled !== false" :disabled="commandSaving" :aria-label="`启用${commandLabels[command.type] || command.type}`" @update:model-value="setCommandEnabled(index, $event)" />
+    <div class="form-body">
+      <button type="button" class="advanced-toggle" @click="voiceCommandsExpanded = !voiceCommandsExpanded">
+        <span>{{ voiceCommandsExpanded ? '收起语音口令配置' : '展开语音口令配置' }}</span>
+        <SlIcon :name="voiceCommandsExpanded ? 'expand_less' : 'expand_more'" :size="20" />
+      </button>
+      <div v-if="voiceCommandsExpanded" class="voice-command-list">
+        <div v-for="(command, index) in state.voiceCommands" :key="commandKey(command, index)" class="voice-command-group">
+          <div class="voice-command-header">
+            <SlIcon :name="commandIcons[command.type] || 'label'" :size="20" />
+            <strong>{{ commandLabels[command.type] || command.type }}</strong>
+            <span v-if="command.param" class="command-param">{{ parameterLabels[command.param] || command.param }}</span>
+            <SlSwitch :model-value="command.enabled !== false" :disabled="commandSaving" :aria-label="`启用${commandLabels[command.type] || command.type}`" @update:model-value="setCommandEnabled(index, $event)" />
+          </div>
+          <div class="command-keywords">
+            <span v-for="(keyword, keywordIndex) in keywordsOf(command)" :key="`${keyword}-${keywordIndex}`" class="command-keyword">
+              <span>{{ keyword }}</span>
+              <button type="button" title="删除口令词" :aria-label="`删除口令词 ${keyword}`" :disabled="commandSaving" @click="removeKeyword(command, index, keywordIndex)"><SlIcon name="close" :size="14" /></button>
+            </span>
+          </div>
+          <div class="command-add-row">
+            <SlInput :model-value="commandInputs[commandKey(command, index)] || ''" :input-key="commandInputVersions[commandKey(command, index)] || 0" placeholder="添加口令词" aria-label="添加口令词" @update:model-value="commandInputs[commandKey(command, index)] = $event" @submit="addKeyword(command, index)" />
+            <SlButton variant="icon" icon="add" title="添加口令词" :disabled="commandSaving" @click="addKeyword(command, index)" />
+          </div>
         </div>
-        <div class="command-keywords">
-          <span v-for="(keyword, keywordIndex) in keywordsOf(command)" :key="`${keyword}-${keywordIndex}`" class="command-keyword">
-            <span>{{ keyword }}</span>
-            <button type="button" title="删除口令词" :aria-label="`删除口令词 ${keyword}`" :disabled="commandSaving" @click="removeKeyword(command, index, keywordIndex)"><SlIcon name="close" :size="14" /></button>
-          </span>
-        </div>
-        <div class="command-add-row">
-          <SlInput :model-value="commandInputs[commandKey(command, index)] || ''" :input-key="commandInputVersions[commandKey(command, index)] || 0" placeholder="添加口令词" aria-label="添加口令词" @update:model-value="commandInputs[commandKey(command, index)] = $event" @submit="addKeyword(command, index)" />
-          <SlButton variant="icon" icon="add" title="添加口令词" :disabled="commandSaving" @click="addKeyword(command, index)" />
-        </div>
+        <div v-if="!state.voiceCommands.length" class="empty-state">暂无语音口令</div>
+        <div class="field-actions"><SlButton variant="text" label="恢复默认" icon="restart_alt" :disabled="commandSaving" @click="resetCommands" /></div>
       </div>
-      <div v-if="!state.voiceCommands.length" class="empty-state">暂无语音口令</div>
-      <div class="field-actions"><SlButton variant="text" label="恢复默认" icon="restart_alt" :disabled="commandSaving" @click="resetCommands" /></div>
+      <div v-else class="collapsed-summary">
+        <span class="chip">{{ state.voiceCommands.length }} 条语音口令</span>
+      </div>
     </div>
     <div class="command-test-panel">
       <strong>口令测试</strong>
@@ -545,20 +613,29 @@ async function deleteMemoryRecord(id?: string): Promise<void> {
   <SectionCard title="语音记忆" icon="memory" description="记录用户说法与歌曲实体的对应关系，减少重复 AI 分析。">
     <SettingRow title="启用语音记忆" subtitle="关闭后保留历史记忆，但不再写入新记录"><SlSwitch :model-value="state.config.voice_memory_enabled" @update:model-value="setSwitch('voice_memory_enabled', $event)" /></SettingRow>
     <div class="form-body">
-      <div class="field"><label class="field-label">最大记忆数量（10-500）</label><SlInput :model-value="maxMemory" type="number" @update:model-value="maxMemory = $event" @change="saveNumber('voice_memory_max_records', maxMemory, 10, 500)" /></div>
-      <div class="status-chips"><span class="chip">已保存 {{ state.memoryStats.recordCount || state.memoryStats.queryCount || 0 }} 条</span><span class="chip">已学习 {{ state.memoryStats.entityCount || 0 }} 首</span><span class="chip">本地命中 {{ state.memoryStats.localHitCount || state.memoryStats.hitCount || 0 }} 次</span></div>
-      <div class="field-actions"><SlButton variant="text" label="刷新" icon="refresh" @click="loadMemory" /><SlButton variant="text" label="清空全部" icon="delete_sweep" @click="clearMemory" /></div>
-    </div>
-    <div class="sub-panel memory-list">
-      <div v-for="entity in state.memoryEntities" :key="String(entity.canonicalKey || entity.canonical_key)" class="memory-entity">
-        <div class="list-item"><div class="list-item-copy"><strong class="list-item-title">{{ entity.songName || '未命名歌曲' }}{{ entity.artist ? ` · ${entity.artist}` : '' }}</strong><span class="list-item-subtitle">{{ memoryAliases(entity).length }} 种说法</span></div><SlButton variant="icon" :icon="expandedMemory === String(entity.canonicalKey || entity.canonical_key) ? 'expand_less' : 'expand_more'" title="展开记忆" @click="expandedMemory = expandedMemory === String(entity.canonicalKey || entity.canonical_key) ? null : String(entity.canonicalKey || entity.canonical_key)" /><SlButton variant="icon" icon="delete" title="删除歌曲记忆" @click="deleteMemoryEntity(String(entity.canonicalKey || entity.canonical_key), entity.songName || '歌曲')" /></div>
-        <div v-if="expandedMemory === String(entity.canonicalKey || entity.canonical_key)" class="memory-aliases">
-          <div v-for="(alias, index) in memoryAliases(entity)" :key="alias.id || index" class="memory-alias-row"><span>{{ alias.query || alias.alias || '未命名说法' }}</span><SlButton v-if="alias.id" variant="icon" icon="close" title="删除这条记忆" @click="deleteMemoryRecord(alias.id)" /></div>
+      <button type="button" class="advanced-toggle" @click="toggleMemoryExpanded">
+        <span>{{ memoryExpanded ? '收起语音记忆' : '展开语音记忆' }}</span>
+        <SlIcon :name="memoryExpanded ? 'expand_less' : 'expand_more'" :size="20" />
+      </button>
+      <div v-if="memoryExpanded" class="sub-panel memory-list">
+        <div class="field"><label class="field-label">最大记忆数量（10-500）</label><SlInput :model-value="maxMemory" type="number" @update:model-value="maxMemory = $event" @change="saveNumber('voice_memory_max_records', maxMemory, 10, 500)" /></div>
+        <div class="status-chips"><span class="chip">已保存 {{ state.memoryStats.recordCount || state.memoryStats.queryCount || 0 }} 条</span><span class="chip">已学习 {{ state.memoryStats.entityCount || 0 }} 首</span><span class="chip">本地命中 {{ state.memoryStats.localHitCount || state.memoryStats.hitCount || 0 }} 次</span></div>
+        <div class="field-actions"><SlButton variant="text" label="刷新" icon="refresh" @click="ensureMemoryLoaded(true)" /><SlButton variant="text" label="清空全部" icon="delete_sweep" @click="clearMemory" /></div>
+        <div class="memory-list-body">
+          <div v-for="entity in state.memoryEntities" :key="String(entity.canonicalKey || entity.canonical_key)" class="memory-entity">
+            <div class="list-item"><div class="list-item-copy"><strong class="list-item-title">{{ entity.songName || '未命名歌曲' }}{{ entity.artist ? ` · ${entity.artist}` : '' }}</strong><span class="list-item-subtitle">{{ memoryAliases(entity).length }} 种说法</span></div><SlButton variant="icon" :icon="expandedMemory === String(entity.canonicalKey || entity.canonical_key) ? 'expand_less' : 'expand_more'" title="展开记忆" @click="expandedMemory = expandedMemory === String(entity.canonicalKey || entity.canonical_key) ? null : String(entity.canonicalKey || entity.canonical_key)" /><SlButton variant="icon" icon="delete" title="删除歌曲记忆" @click="deleteMemoryEntity(String(entity.canonicalKey || entity.canonical_key), entity.songName || '歌曲')" /></div>
+            <div v-if="expandedMemory === String(entity.canonicalKey || entity.canonical_key)" class="memory-aliases">
+              <div v-for="(alias, index) in memoryAliases(entity)" :key="alias.id || index" class="memory-alias-row"><span>{{ alias.query || alias.alias || '未命名说法' }}</span><SlButton v-if="alias.id" variant="icon" icon="close" title="删除这条记忆" @click="deleteMemoryRecord(alias.id)" /></div>
+            </div>
+          </div>
+          <div v-if="!state.memoryEntities.length" class="empty-state">暂无可聚合的歌曲记忆</div>
+          <div v-if="state.memoryUnclassified.length" class="field-help">未归类记忆 {{ state.memoryUnclassified.length }} 条</div>
+          <div v-if="state.memoryAmbiguous.length" class="field-help">最近歧义 {{ state.memoryAmbiguous.length }} 条</div>
         </div>
       </div>
-      <div v-if="!state.memoryEntities.length" class="empty-state">暂无可聚合的歌曲记忆</div>
-      <div v-if="state.memoryUnclassified.length" class="field-help">未归类记忆 {{ state.memoryUnclassified.length }} 条</div>
-      <div v-if="state.memoryAmbiguous.length" class="field-help">最近歧义 {{ state.memoryAmbiguous.length }} 条</div>
+      <div v-else class="collapsed-summary">
+        <span class="chip">记忆数据按需加载</span>
+      </div>
     </div>
   </SectionCard>
 
@@ -569,7 +646,26 @@ async function deleteMemoryRecord(id?: string): Promise<void> {
       <div class="field"><label class="field-label">搜索优先级</label><SlSelect :model-value="state.config.search_priority" :options="searchPriorityOptions" aria-label="搜索优先级" @update:model-value="saveConfig({ search_priority: $event as 'parallel' | 'local_first' | 'external_first' })" /></div>
       <div class="field-grid"><div class="field"><label class="field-label">超时（秒）</label><SlInput :model-value="String(state.config.external_search_timeout)" type="number" @update:model-value="saveConfig({ external_search_timeout: Math.max(3, Math.min(60, Number($event) || 6)) })" /></div><div class="field setting-field-control"><label class="field-label">不入库直接播放</label><SlSwitch :model-value="state.config.external_search_no_import" @update:model-value="setSwitch('external_search_no_import', $event)" /></div></div>
       <h3 class="card-title">已安装搜索源</h3>
-      <div v-for="provider in state.searchProviders" :key="provider.id || provider.entry_path || provider.entryPath || provider.name" class="list-item"><div class="list-item-copy"><strong class="list-item-title">{{ provider.name }}</strong><span class="list-item-subtitle">{{ provider.url || provider.entry_path || provider.entryPath }}</span></div><SlButton variant="text" label="添加" @click="newSourceName = provider.name; newSourceUrl = provider.url || provider.search_path || provider.searchPath || '/api/search/topone'" /></div>
+      <div class="field-grid">
+        <div class="field">
+          <label class="field-label">快速选择</label>
+          <SlSelect
+            v-model="selectedProviderId"
+            :options="searchProviderOptions"
+            allow-empty
+            placeholder="选择已安装搜索源"
+            aria-label="选择已安装搜索源"
+            @update:model-value="fillSourceFromProvider($event)"
+          />
+        </div>
+        <div class="field setting-field-control">
+          <label class="field-label">操作</label>
+          <div class="field-actions field-actions-tight">
+            <SlButton variant="outlined" label="刷新" icon="refresh" @click="refreshSearchProviders" />
+            <SlButton variant="outlined" label="填入" icon="download" :disabled="!selectedProviderId" @click="fillSourceFromProvider(selectedProviderId)" />
+          </div>
+        </div>
+      </div>
       <h3 class="card-title section-subtitle">已配置源</h3>
       <div v-for="source in state.config.external_search_sources" :key="source.id" class="sub-panel sub-panel-inset">
         <div class="field-grid"><SlInput v-model="sourceDrafts[source.id].name" placeholder="显示名称" /><SlInput v-model="sourceDrafts[source.id].url" placeholder="接口地址" /></div>

@@ -306,6 +306,7 @@ html.webf-engine .player-sleep-popup { left: calc(50% - 140px); transform: none;
 .dependency-hint { display: flex; align-items: flex-start; gap: 8px; margin: 12px 20px 0; padding: 10px 12px; border-radius: var(--md-radius-sm); background: var(--md-error-container); color: var(--md-on-error-container); font-size: 13px; }
 .dependency-hint > span { min-width: 0; overflow-wrap: anywhere; }
 .voice-command-list { padding-top: 4px; }
+.collapsed-summary { padding: 10px 0 4px; }
 .voice-command-group { padding: 14px 0; border-bottom: 1px solid var(--md-outline-variant); }
 .voice-command-group:last-of-type { border-bottom: 0; }
 .voice-command-header { min-width: 0; display: flex; align-items: center; gap: 8px; margin-bottom: 10px; color: var(--md-primary); }
