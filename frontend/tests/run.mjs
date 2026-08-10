@@ -100,6 +100,10 @@ assert.doesNotMatch(mainPage, /:height="'var\(--miot-list-height\)'"/);
 assert.match(mainPage, /songRenderLimit = ref\(20\)/);
 assert.match(mainPage, /visibleSongs\.value\.slice\(0, songRenderLimit\.value\)/);
 assert.match(mainPage, /songRenderLimit\.value = Math\.min\(songRenderLimit\.value \+ songRenderBatchSize/);
+// #374 回归测试：定位当前播放歌曲前必须校验 WebF 是否已完成布局（否则 scrollTop 会被计算成 0，
+// 表现为“定位功能始终回第一屏”），不允许在拿到零尺寸测量值时直接应用 scrollTop。
+assert.match(mainPage, /rowRect\.height <= 0 \|\| list\.clientHeight <= 0/);
+assert.match(mainPage, /locateTimer = setTimeout\(\(\) => scrollToCurrentSong\(attempt \+ 1\)/);
 assert.match(slListView, /defineEmits<\{ scroll/);
 assert.match(style, /\.player-bar-shell[\s\S]*position: fixed/);
 assert.match(style, /\.song-cover[^}]*width: 48px[^}]*height: 48px/);

@@ -23,6 +23,7 @@ const renderedSongs = computed(() => visibleSongs.value.slice(0, songRenderLimit
 const noServerHint = computed(() => !state.config.server_host || state.config.server_host_status === 'loopback');
 const listMeasureRetries = 6;
 let listMeasureTimer: ReturnType<typeof setTimeout> | null = null;
+let locateTimer: ReturnType<typeof setTimeout> | null = null;
 let mounted = false;
 
 function measureListHeight(attempt = 0): void {
@@ -62,18 +63,27 @@ async function play(song: Song, index: number) {
   try { await playSong(song, index); } catch (error) { /* store already presents the error */ notifyLocal(error); }
 }
 function notifyLocal(error: unknown) { console.warn('[miot] play failed', messageOf(error)); }
+function scrollToCurrentSong(attempt = 0): void {
+  if (!mounted) return;
+  const list = document.querySelector<HTMLElement>('.sl-list-view');
+  const row = document.querySelector<HTMLElement>('.song-row-current');
+  if (!list || !row) return;
+  const listRect = list.getBoundingClientRect();
+  const rowRect = row.getBoundingClientRect();
+  // WebF 布局是异步的：nextTick 只保证 Vue patch 完成，新插入的行此刻可能仍是零尺寸，
+  // 直接拿零值计算会把 scrollTop 冲到负值（被钳制为 0），表现为"始终跳回第一屏"。
+  if (rowRect.height <= 0 || list.clientHeight <= 0) {
+    if (attempt < listMeasureRetries) locateTimer = setTimeout(() => scrollToCurrentSong(attempt + 1), 32 * (attempt + 1));
+    return;
+  }
+  list.scrollTop += rowRect.top - listRect.top - (list.clientHeight - rowRect.height) / 2;
+}
 function locateCurrentSong() {
   const currentIndex = visibleSongs.value.findIndex((song) => song.id === state.player.current_song?.id);
   if (currentIndex < 0) return;
   if (currentIndex >= songRenderLimit.value) songRenderLimit.value = Math.min(currentIndex + songRenderBatchSize, visibleSongs.value.length);
-  void nextTick(() => {
-    const list = document.querySelector<HTMLElement>('.sl-list-view');
-    const row = document.querySelector<HTMLElement>('.song-row-current');
-    if (!list || !row) return;
-    const listRect = list.getBoundingClientRect();
-    const rowRect = row.getBoundingClientRect();
-    list.scrollTop += rowRect.top - listRect.top - (list.clientHeight - rowRect.height) / 2;
-  });
+  if (locateTimer) clearTimeout(locateTimer);
+  void nextTick(() => scrollToCurrentSong());
 }
 watch(() => [state.selectedPlaylistId, state.songSearch], resetSongRenderLimit);
 watch(
@@ -89,6 +99,7 @@ onUnmounted(() => {
   mounted = false;
   window.removeEventListener('resize', remeasureList);
   if (listMeasureTimer) clearTimeout(listMeasureTimer);
+  if (locateTimer) clearTimeout(locateTimer);
 });
 </script>
 
