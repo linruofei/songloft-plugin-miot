@@ -35,6 +35,7 @@ export interface DeviceConfig {
   managed: boolean;
   volume: number;
   play_mode: string;         // "order" | "random" | "single" | "loop" | "singlePlay"
+  play_speed: number;        // 播放倍速 [0.5, 2.0]，1 = 原速；持久化，重启后恢复
   playlist_id: number;
   current_song_index: number;
   last_selected_at: string;
@@ -331,4 +332,5 @@ export interface PlayerStatus {
   position: number;
   duration: number;
   is_playing: boolean;
+  speed: number;             // 当前播放倍速 [0.5, 2.0]，1 = 原速
 }

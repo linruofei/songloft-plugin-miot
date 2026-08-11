@@ -379,8 +379,9 @@ export class MinaService {
    *
    * ubus 响应形如 `{ data: { info: '{"status":1,"volume":50,"play_song_detail":{"position":12000}}' } }`：
    * status 1=playing / 2=paused / 0=stopped，-1 表示拿不到；position 为**流内**偏移（秒），
-   * 带 seek 的流要加上 PlaylistManager.getStreamSeekOffsetSec() 才是曲内绝对位置。
-   * 设备不上报 play_song_detail 时 position 退化为 0（此时别拿它当「真在开头」用）。
+   * 带 seek/倍速的流要换算成曲内绝对位置：流内偏移 × getPlaybackSpeed() + getStreamSeekOffsetSec()
+   * （speed=1 时退化为只加 seekOffset）。设备不上报 play_song_detail 时 position 退化为 0
+   * （此时别拿它当「真在开头」用）。
    */
   async getPlayState(accountId: string, deviceId: string): Promise<{ status: number; position: number }> {
     const raw = await this.getPlayerStatus(accountId, deviceId);

@@ -164,19 +164,24 @@ export async function resolvePlayerStatus(
 
   // 带 seek 的续播流对设备是「从 0 开始的新流」，它上报的 position 只是流内偏移；
   // 加上偏移才是曲内绝对位置。不补的话续播后进度条会掉回 0（songloft-org/songloft-plugin-miot#60）。
+  // 倍速流下流内偏移还要乘以 speed：设备以原速播放「被压缩过的」流，流内 1 秒 = speed 曲内秒。
+  // speed=1 时退化为只加 seekOffset，兼容旧逻辑。
   const seekOffset = manager.getStreamSeekOffsetSec();
+  const speed = manager.getPlaybackSpeed();
 
   // 检查设备状态缓存（4秒内直接复用，避免多调用方重复查询设备）
   const cached = deviceStatusCache.get(cacheKey);
   if (cached && (now - cached.timestamp) < DEVICE_STATUS_TTL) {
     const duration = localStatus.duration > 0 ? localStatus.duration : cached.duration;
-    const cachedAbsPosition = cached.positionFromDevice ? cached.position + seekOffset : cached.position;
+    // 设备实测的流内偏移要 × speed + seekOffset 才是曲内绝对位置；非设备实测值（乐观写入）已是绝对位置。
+    const cachedAbsPosition = cached.positionFromDevice ? cached.position * speed + seekOffset : cached.position;
 
-    // 播放中时用缓存position + 已过时间推算当前位置，避免返回过时进度
+    // 播放中时用缓存位置 + 已过墙钟时间推算当前位置，避免返回过时进度。
+    // 倍速下墙钟 1 秒 = speed 曲内秒，故 elapsed 也要 × speed。
     let position = cachedAbsPosition;
     if (cached.state === 'playing' && duration > 0) {
       const elapsed = (now - cached.timestamp) / 1000;
-      position = Math.min(cachedAbsPosition + elapsed, duration);
+      position = Math.min(cachedAbsPosition + elapsed * speed, duration);
     }
 
     // 用被查询设备的物理进度校准共享切歌定时器。分组下无论查询哪个成员都可校准
@@ -214,8 +219,9 @@ export async function resolvePlayerStatus(
         const d = parsed.play_song_detail;
         if (typeof d.position === 'number') {
           devicePosition = Math.floor(d.position / 1000);
-          // seek 流从曲内 seekOffset 秒开始，设备给的是流内偏移，补成曲内绝对位置
-          realPosition = devicePosition + seekOffset;
+          // seek/倍速流对设备是「从 0 开始的新流」，设备给的是流内偏移：
+          // 乘以 speed 还原成曲内秒，再加 seekOffset 得曲内绝对位置。
+          realPosition = devicePosition * speed + seekOffset;
         }
         if (typeof d.duration === 'number') realDuration = Math.floor(d.duration / 1000);
       }
@@ -260,6 +266,7 @@ export async function resolvePlayerStatus(
  * POST /player/previous      → 上一首
  * POST /player/next          → 下一首
  * POST /player/seek          → 跳转播放进度
+ * POST /player/speed         → 设置播放倍速
  * POST /player/mode          → 设置播放模式
  * GET  /player/status        → 获取播放状态
  */
@@ -603,6 +610,47 @@ export function registerPlaylistHandlers(
       const state = wasPaused ? 'paused' : 'playing';
       updateDeviceStatusCache(account_id, device_id, { state, position });
       return jsonResponse({ success: true, data: { message: 'playback position updated', state, position } });
+    } catch (e: any) {
+      return jsonResponse({ success: false, error: e.message || String(e) });
+    }
+  });
+
+  // POST /player/speed - 设置播放倍速
+  router.post('/player/speed', async (req: HTTPRequest) => {
+    try {
+      const body = parseBody(req);
+      const query = parseQuery(req.query);
+      const account_id = body.account_id || query.account_id;
+      const device_id = body.device_id || query.device_id;
+      const speed = Number(body.speed);
+
+      if (!account_id || !device_id) {
+        return jsonResponse({ success: false, error: 'account_id and device_id are required' });
+      }
+      if (!Number.isFinite(speed) || speed < 0.5 || speed > 2.0) {
+        return jsonResponse({ success: false, error: 'speed must be a number in [0.5, 2.0]' });
+      }
+
+      const manager = playlistManagerMap.get(account_id, device_id);
+      if (!manager) {
+        return jsonResponse({ success: false, error: 'no active playlist for this device' });
+      }
+      const song = manager.getCurrentSong();
+      if (song && (song.type === 'radio' || !song.duration || song.duration <= 0)) {
+        // 电台/无时长歌曲不支持变速：仍持久化设置（切到普通歌曲后生效），但不重推流。
+        songloft.log.info(`[player/speed] current song does not support speed, persisted only speed=${speed}`);
+        return jsonResponse({ success: true, data: { message: 'speed persisted but current song does not support seeking', speed } });
+      }
+
+      const ok = await manager.setPlaybackSpeed(speed);
+      if (!ok) {
+        return jsonResponse({ success: false, error: 'failed to set playback speed' });
+      }
+
+      const state = manager.getStatus().state;
+      const position = manager.getStatus().position;
+      updateDeviceStatusCache(account_id, device_id, { state, position });
+      return jsonResponse({ success: true, data: { message: 'playback speed set', state, speed } });
     } catch (e: any) {
       return jsonResponse({ success: false, error: e.message || String(e) });
     }

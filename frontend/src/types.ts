@@ -154,6 +154,7 @@ export interface PlayerStatus {
   current_index?: number;
   current_song?: Song | null;
   device_online?: boolean;
+  speed?: number;
 }
 
 export interface SleepTimerStatus {

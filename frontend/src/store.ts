@@ -391,6 +391,10 @@ export async function setPlayMode(mode: PlayMode): Promise<void> {
   await playerCommand('/player/mode', { play_mode: mode });
 }
 
+export async function setPlaybackSpeed(speed: number): Promise<void> {
+  await playerCommand('/player/speed', { speed });
+}
+
 export async function seekPlayer(position: number): Promise<void> {
   const duration = Number(state.player.duration || 0);
   if (duration <= 0) return;

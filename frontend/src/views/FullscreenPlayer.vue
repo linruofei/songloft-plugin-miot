@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { songCoverUrl } from '../covers';
 import PlayerModePopup from './PlayerModePopup.vue';
+import PlayerSpeedPopup from './PlayerSpeedPopup.vue';
 import PlayerProgress from './PlayerProgress.vue';
 import PlayerSleepTimerPopup from './PlayerSleepTimerPopup.vue';
 import PlayerVolumePopup from './PlayerVolumePopup.vue';
@@ -10,7 +11,7 @@ import SlIcon from '../ui/SlIcon.vue';
 import { closePage, navigation } from '../runtime';
 import { get, messageOf, post, query } from '../api';
 import type { SleepTimerStatus } from '../types';
-import { notify, playerCommand, seekPlayer, setPlayMode, setVolume, state } from '../store';
+import { notify, playerCommand, seekPlayer, setPlayMode, setPlaybackSpeed, setVolume, state } from '../store';
 
 interface LyricLine { time: number; text: string }
 interface LyricPayload { lyric?: string; tlyric?: string; rlyric?: string; lxlyric?: string }
@@ -330,6 +331,12 @@ watch(activeLyric, centerActiveLyric);
               :disabled="state.playerBusy"
               @change="setPlayMode"
             />
+            <PlayerSpeedPopup
+              :model-value="Number(state.player.speed || 1)"
+              popup-id="full-speed"
+              :disabled="state.playerBusy"
+              @change="setPlaybackSpeed"
+            />
             <SlButton variant="icon" icon="skip_previous" player-icon icon-size="38" class="player-control-button" title="上一首" :disabled="state.playerBusy" @click="playerCommand('/player/previous')" />
             <SlButton
               class="control-primary"
@@ -371,6 +378,13 @@ watch(activeLyric, centerActiveLyric);
               popup-id="full-mode-desktop"
               :disabled="state.playerBusy"
               @change="setPlayMode"
+            />
+            <PlayerSpeedPopup
+              class="fullscreen-tool-desktop"
+              :model-value="Number(state.player.speed || 1)"
+              popup-id="full-speed-desktop"
+              :disabled="state.playerBusy"
+              @change="setPlaybackSpeed"
             />
             <PlayerVolumePopup
               :model-value="Number(state.player.volume || 0)"

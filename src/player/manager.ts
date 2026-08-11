@@ -114,6 +114,10 @@ export class PlaylistManager {
   // 当前推给设备的流从歌曲第几秒开始。带 seek 的流对音箱是「从 0 开始的新流」，
   // 它上报的 position 只是流内偏移；加上本值才是曲内绝对位置（消费点见 handlers/playlist.ts）。
   private streamSeekOffsetSec: number = 0;
+  // 当前推给设备的流的播放倍速。倍速流对音箱是「从 0 开始、已被时间压缩/拉伸过的新流」，
+  // 它正常速度播放，上报的流内偏移要乘以本值才是曲内秒；与 streamSeekOffsetSec 一起参与换算。
+  // 默认 1.0（不变速），seek 续播/切歌后随 playCurrent 一起重置。
+  private playbackSpeed: number = 1.0;
   // 输出目标设备集合：独立设备时仅含自身；分组时含组内全部成员。
   // 一个分组共用一个 PlaylistManager（同一套队列/索引/播放模式/定时器/随机数），
   // 播放/暂停/停止/切歌等指令统一下发给 targets 里的所有音箱，从根本上保证多房间同步、随机不跑偏。
@@ -484,6 +488,7 @@ export class PlaylistManager {
       duration: duration,
       is_playing: this.state === 'playing',
       playlist_name: this.tempPlaylistName || undefined,
+      speed: this.playbackSpeed,
     };
   }
 
@@ -591,10 +596,10 @@ export class PlaylistManager {
 
     const song = this.getCurrentSong();
     if (song && song.duration > 0 && this.playStartTimeMs > 0) {
-      const elapsedSec = (Date.now() - this.playStartTimeMs) / 1000;
+      const elapsedSec = ((Date.now() - this.playStartTimeMs) / 1000) * this.playbackSpeed;
       const remaining = song.duration - elapsedSec;
       if (remaining > 0) {
-        this.startCheckTimer(remaining);
+        this.startCheckTimer(remaining / this.playbackSpeed);
         songloft.log.info(`[PlaylistManager] Timer reset after resume: remaining=${remaining.toFixed(1)}s`);
       }
     }
@@ -648,13 +653,17 @@ export class PlaylistManager {
   }
 
   /**
-   * 获取当前播放位置（秒）
+   * 获取当前播放位置（秒，曲内绝对位置）
+   *
+   * 倍速下「墙钟经过秒数」不等于「曲内经过秒数」：1.5x 流播放 1 墙钟秒 = 1.5 曲内秒。
+   * playStartTimeMs 在 playCurrent 里按 1/speed 反向缩放锚定（见那处的注释），
+   * 这里要再按 speed 正向缩放回来，得到「从 seekSeconds 起、按 speed 倍速流逝」的曲内绝对位置。
    */
   getPosition(): number {
     if (this.state !== 'playing' || this.playStartTimeMs === 0) {
       return 0;
     }
-    const elapsed = (Date.now() - this.playStartTimeMs) / 1000;
+    const elapsed = ((Date.now() - this.playStartTimeMs) / 1000) * this.playbackSpeed;
     const song = this.getCurrentSong();
     if (song && song.duration > 0 && elapsed > song.duration) {
       return song.duration;
@@ -721,18 +730,21 @@ export class PlaylistManager {
 
     let remaining: number;
     if (typeof devicePositionSec === 'number' && devicePositionSec >= 0) {
+      // devicePositionSec 是曲内绝对位置（调用方已把设备流内偏移按 speed 换算好）。
+      // 锚点要按 1/speed 反向缩放：倍速下 playStartTimeMs 到 now 的墙钟差 × speed 才等于曲内位置。
+      this.playStartTimeMs = Date.now() - (devicePositionSec / this.playbackSpeed) * 1000;
       remaining = song.duration - devicePositionSec;
-      this.playStartTimeMs = Date.now() - devicePositionSec * 1000;
     } else if (this.playStartTimeMs > 0) {
-      const elapsedSec = (Date.now() - this.playStartTimeMs) / 1000;
+      const elapsedSec = ((Date.now() - this.playStartTimeMs) / 1000) * this.playbackSpeed;
       remaining = song.duration - elapsedSec;
     } else {
       return;
     }
 
     if (remaining > 0) {
-      this.startCheckTimer(remaining);
-      songloft.log.info(`[PlaylistManager] Timer reset: remaining=${remaining.toFixed(1)}s`);
+      // remaining 是曲内剩余秒数，定时器要按墙钟等：倍速下曲内 N 秒只需 N/speed 墙钟秒走完。
+      this.startCheckTimer(remaining / this.playbackSpeed);
+      songloft.log.info(`[PlaylistManager] Timer reset: remaining=${remaining.toFixed(1)}s (wall ${((remaining / this.playbackSpeed).toFixed(1))}s speed=${this.playbackSpeed})`);
     } else {
       this.startCheckTimer(0.1);
       songloft.log.info(`[PlaylistManager] Timer reset: song ended (remaining=${remaining.toFixed(1)}s), triggering auto-next`);
@@ -752,6 +764,53 @@ export class PlaylistManager {
   /** 当前推给设备的流从歌曲第几秒开始（设备上报的 position 需加此值才是曲内绝对位置） */
   getStreamSeekOffsetSec(): number {
     return this.streamSeekOffsetSec;
+  }
+
+  /** 当前推给设备的流的播放倍速（设备上报的流内偏移需乘此值才是曲内秒） */
+  getPlaybackSpeed(): number {
+    return this.playbackSpeed;
+  }
+
+  /**
+   * 设置播放倍速并立即对正在播放的音频生效。
+   *
+   * 与 setPlayMode 不同：play_mode 只影响「下一首怎么选」，可静默改状态不动当前播放；
+   * 倍速必须让正在播的音频立即变速，所以触发一次 playCurrent——以当前曲内位置为起点、
+   * 新倍速重推一条流，直接复用 seek 已经打好的「重推 URL 模拟续播」骨架
+   * （暂停态保持、播放态不重复起播等分支逻辑不用重写）。
+   *
+   * 停止/空闲态下只更新字段与持久化，下次 playCurrent 自然带上新倍速，不强行起播。
+   */
+  async setPlaybackSpeed(speed: number): Promise<boolean> {
+    const clamped = Math.max(0.5, Math.min(2, speed));
+    const wasPaused = this.state === 'paused';
+    const wasStopped = this.state === 'stopped' || this.state === 'idle';
+    this.playbackSpeed = clamped;
+
+    // 持久化到设备配置（与 setPlayMode 一致）
+    try {
+      await this.configManager.updateDevice(this.accountId, this.deviceId, {
+        play_speed: clamped,
+      });
+    } catch (e) {
+      songloft.log.warn('[PlaylistManager] Failed to save playback speed: ' + String(e));
+    }
+
+    songloft.log.info(`[PlaylistManager] Playback speed set to ${clamped}`);
+
+    // 停止/空闲态：不强行起播，等下次 play 带上新倍速。
+    if (wasStopped || !this.getCurrentSong()) {
+      return true;
+    }
+
+    // 以当前曲内位置为起点重推一条新倍速的流
+    const position = wasPaused ? this.pausedPositionSec : this.getPosition();
+    const ok = await this.playCurrent({ seekSeconds: position, speed: clamped });
+    if (ok && wasPaused) {
+      // 暂停态切倍速：重推后立即暂停，保持暂停态（与 /player/seek 的语义一致）
+      await this.pause();
+    }
+    return ok;
   }
 
   /**
@@ -862,8 +921,10 @@ export class PlaylistManager {
    * @param opts.seekSeconds 曲内起播位置（秒）。服务端会产出以该位置为开头的 MP3 流，
    *   用于「设备端媒体上下文已丢失、只能重推 URL」的续播场景（硬停续播、语音打断恢复）。
    *   其余调用方不传即从头播，并顺带把 seek 状态清零。
+   * @param opts.speed 本次流的播放倍速。不传则沿用 this.playbackSpeed（保持上次设置）。
+   *   服务端产出变速流，本机据此换算进度与自动切歌定时器。
    */
-  private async playCurrent(opts?: { seekSeconds?: number }): Promise<boolean> {
+  private async playCurrent(opts?: { seekSeconds?: number; speed?: number }): Promise<boolean> {
     if (this.currentIndex < 0 || this.currentIndex >= this.songs.length) {
       songloft.log.error('[PlaylistManager] Invalid current index: ' + this.currentIndex);
       return false;
@@ -875,12 +936,16 @@ export class PlaylistManager {
     this.clearPendingNextIndex();
 
     const song = this.songs[this.currentIndex];
+    // 本次流的倍速：显式传入优先，否则沿用当前值（切歌/续播时保持上次倍速不丢）。
+    const speed = typeof opts?.speed === 'number' && opts.speed > 0 ? opts.speed : this.playbackSpeed;
     // 起播位置夹到 [0, duration-3)：贴近结尾的 seek 会让服务端零输出并降级成整首重播，
     // 与服务端 parseSeekSeconds 的守卫同源。电台是直播流，没有曲内位置可言。
     let seekSeconds = Math.max(0, Math.floor(opts?.seekSeconds || 0));
     if (song.type === 'radio' || (song.duration > 0 && seekSeconds >= song.duration - 3)) {
       seekSeconds = 0;
     }
+    // 电台无倍速概念，服务端会忽略 speed；本地/网络歌曲才带。
+    const effectiveSpeed = song.type === 'radio' ? 1 : speed;
 
     // 检查服务器地址
     const serverHost = getHostBaseUrl();
@@ -894,13 +959,13 @@ export class PlaylistManager {
     const config = await this.configManager.getConfig();
 
     // 构造播放URL
-    const songURL = await URLBuilder.buildSongURL(song, playbackOptionsOf(config, { seekSeconds }));
+    const songURL = await URLBuilder.buildSongURL(song, playbackOptionsOf(config, { seekSeconds, speed: effectiveSpeed }));
     if (!songURL) {
       songloft.log.error('[PlaylistManager] Failed to build song URL: ' + song.title);
       return false;
     }
 
-    songloft.log.info(`[PlaylistManager] Playing song index=${this.currentIndex} title=${song.title} artist=${song.artist} duration=${song.duration} seek=${seekSeconds} targets=${this.targets.length}`);
+    songloft.log.info(`[PlaylistManager] Playing song index=${this.currentIndex} title=${song.title} artist=${song.artist} duration=${song.duration} seek=${seekSeconds} speed=${effectiveSpeed} targets=${this.targets.length}`);
 
     // 下发到所有目标设备（分组时为组内全部音箱；传结构化歌曲信息供触屏歌词模式匹配曲库）。
     // 至少一台成功即视为成功；个别成员离线/失败不影响整组继续（自动切歌定时器仍以本机时长驱动）。
@@ -918,14 +983,17 @@ export class PlaylistManager {
     this.hardStopped = false;
     this.pausedPositionSec = 0;
     this.streamSeekOffsetSec = seekSeconds;
-    // 从第 seekSeconds 秒起播：把起播时间戳往前挪，getPosition() 直接给出曲内绝对位置
-    this.playStartTimeMs = Date.now() - seekSeconds * 1000;
+    this.playbackSpeed = effectiveSpeed;
+    // 锚点按 1/speed 反向缩放：getPosition() 里再把墙钟差 × speed 还原成曲内位置。
+    // speed=1 时退化为旧式 Date.now() - seekSeconds*1000，兼容旧行为。
+    this.playStartTimeMs = Date.now() - (seekSeconds / effectiveSpeed) * 1000;
 
-    // 如果歌曲时长有效，注册定时器播放下一首（seek 起播时只等剩余时长）
+    // 如果歌曲时长有效，注册定时器播放下一首（seek 起播时只等剩余时长）。
+    // adjustedDuration 是曲内剩余秒数，定时器按墙钟等：倍速下曲内 N 秒只需 N/speed 墙钟秒。
     if (song.duration > 0) {
       const offset = config.song_transition_offset || 0;
       const adjustedDuration = Math.max(1, song.duration + offset - seekSeconds);
-      this.startCheckTimer(adjustedDuration);
+      this.startCheckTimer(adjustedDuration / effectiveSpeed);
     } else {
       songloft.log.warn('[PlaylistManager] Song duration invalid, no auto-next timer: ' + song.duration);
     }
@@ -1032,7 +1100,7 @@ export class PlaylistManager {
         return (this.currentIndex + 1) % len;
 
       case 'single':
-        // 单曲循环：一直播放当前歌曲
+        // 单曲循环：一直播放当��歌曲
         return this.currentIndex;
 
       case 'singlePlay':
@@ -1522,7 +1590,12 @@ export class PlaylistManagerMap {
         const startIndex = devCfg.current_song_index || 0;
         const playMode = normalizePlayMode(devCfg.play_mode);
         manager.initWithSongs(songs, startIndex, playMode, devCfg.playlist_id);
-        songloft.log.info(`[PlaylistManagerMap] Restored playlist from config playlistId=${devCfg.playlist_id} index=${startIndex} mode=${playMode}`);
+        // 恢复持久化的倍速（缺省 1.0）。仅设字段，不触发重推——恢复时本就不在播。
+        const speed = typeof devCfg.play_speed === 'number' && devCfg.play_speed > 0
+          ? Math.max(0.5, Math.min(2, devCfg.play_speed))
+          : 1;
+        (manager as any).playbackSpeed = speed;
+        songloft.log.info(`[PlaylistManagerMap] Restored playlist from config playlistId=${devCfg.playlist_id} index=${startIndex} mode=${playMode} speed=${speed}`);
       }
     } catch (e) {
       songloft.log.warn('[PlaylistManagerMap] Failed to restore playlist from config: ' + String(e));

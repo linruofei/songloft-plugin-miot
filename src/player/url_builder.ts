@@ -19,6 +19,7 @@ export interface PlaybackURLOptions {
   radioForceMp3?: boolean;
   normalize?: boolean;
   seekSeconds?: number;
+  speed?: number;
   baseUrl?: string;
 }
 
@@ -31,13 +32,14 @@ export interface PlaybackURLOptions {
  */
 export function playbackOptionsOf(
   config: { force_mp3?: boolean; radio_force_mp3?: boolean; volume_normalize?: boolean },
-  extra?: { seekSeconds?: number },
+  extra?: { seekSeconds?: number; speed?: number },
 ): PlaybackURLOptions {
   return {
     forceMp3: !!config.force_mp3,
     radioForceMp3: !!config.radio_force_mp3,
     normalize: !!config.volume_normalize,
     seekSeconds: extra?.seekSeconds,
+    speed: extra?.speed,
   };
 }
 
@@ -47,13 +49,13 @@ export function playbackOptionsOf(
  */
 export async function playbackOptionsFromConfig(
   configManager: { getConfig(): Promise<any> },
-  extra?: { seekSeconds?: number },
+  extra?: { seekSeconds?: number; speed?: number },
 ): Promise<PlaybackURLOptions> {
   try {
     return playbackOptionsOf(await configManager.getConfig(), extra);
   } catch (e) {
     songloft.log.warn('[URLBuilder] 读取播放选项失败，按源格式播放: ' + String(e));
-    return { seekSeconds: extra?.seekSeconds };
+    return { seekSeconds: extra?.seekSeconds, speed: extra?.speed };
   }
 }
 
@@ -75,6 +77,8 @@ export class URLBuilder {
    * @param options.seekSeconds 从第 N 秒起播：追加 seek=N，服务端产出以该位置为开头的 MP3 流。
    *   音箱只会从头拉 URL，续播位置只能这样表达（songloft-org/songloft-plugin-miot#60）。
    *   电台（直播）无位置概念，自动忽略。
+   * @param options.speed 播放倍速 [0.5, 2.0]，追加 speed=N，服务端用 ffmpeg atempo 滤镜实时变速
+   *   不变调。1.0 或缺省不追加（避免给不支持的后端塞噪音参数）。电台、电台直播流无倍速概念，忽略。
    * @param options.baseUrl 覆盖服务器地址。默认用 getHostBaseUrl()（用户配的 server_host，
    *   那是给**音箱**访问用的局域网/公网地址）。插件自己要发请求时必须传本机 API 地址
    *   （getHostAPIBaseUrl()），否则外网部署下会变成一次 hairpin NAT 出网回环
@@ -125,6 +129,12 @@ export class URLBuilder {
     const seek = Math.floor(options?.seekSeconds || 0);
     if (seek > 0 && song.type !== 'radio') {
       url += '&seek=' + seek;
+    }
+    // 倍速：同 seek 走服务端实时转码（atempo 滤镜）。1.0/缺省不追加，减少 URL 噪音，
+    // 也避免给不支持 speed 参数的旧后端塞一个会被忽略但没必要存在的参数。电台忽略。
+    const speed = options?.speed;
+    if (speed && speed !== 1 && song.type !== 'radio') {
+      url += '&speed=' + speed;
     }
 
     // 回环告警只对「给音箱用的地址」有意义；显式覆盖成本机地址时（插件自己发请求）回环是正常的。
