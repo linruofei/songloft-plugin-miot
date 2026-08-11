@@ -308,7 +308,19 @@ export function registerPlaylistHandlers(
         }
         return jsonResponse({ success: true, data: manager.getSongs() });
       }
-      const songs = await songloft.playlists.getSongs(playlistId, { limit: 100000, brief: true } as any);
+      // 获取歌单排序偏好
+      let sortBy = '';
+      let sortOrder = '';
+      try {
+        const pl: any = await songloft.playlists.getById(playlistId);
+        if (pl && pl.sort_by) {
+          sortBy = pl.sort_by;
+          sortOrder = pl.sort_order || 'asc';
+        }
+      } catch (e) {
+        songloft.log.warn(`[playlists/:id/songs] getById for sort failed: ${String(e)}`);
+      }
+      const songs = await songloft.playlists.getSongs(playlistId, { limit: 100000, brief: true, sort: sortBy, order: sortOrder } as any);
       return jsonResponse({ success: true, data: songs });
     } catch (e: any) {
       return jsonResponse({ success: false, error: e.message || String(e) });

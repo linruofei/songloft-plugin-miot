@@ -125,6 +125,8 @@ export interface Playlist {
   name: string;
   song_count?: number;
   type?: string;
+  sort_by?: string;
+  sort_order?: string;
 }
 
 export interface Song {

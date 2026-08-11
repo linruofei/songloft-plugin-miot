@@ -792,11 +792,24 @@ export class PlaylistManager {
    * 首次返回空时延迟 500ms 重试一次（规避 SQLite WAL 长时间运行后的间歇性空返回）
    */
   private async loadPlaylistSongs(playlistId: number): Promise<boolean> {
+    // 获取歌单排序偏好
+    let sortBy = '';
+    let sortOrder = '';
+    try {
+      const pl: any = await songloft.playlists.getById(playlistId);
+      if (pl && pl.sort_by) {
+        sortBy = pl.sort_by;
+        sortOrder = pl.sort_order || 'asc';
+      }
+    } catch (e) {
+      songloft.log.warn(`[PlaylistManager] loadPlaylistSongs: getById for sort failed playlistId=${playlistId}: ${String(e)}`);
+    }
+
     const attempt = async (retry: boolean): Promise<boolean> => {
       try {
-        const songs = await songloft.playlists.getSongs(playlistId, { limit: 100000 });
+        const songs = await songloft.playlists.getSongs(playlistId, { limit: 100000, sort: sortBy, order: sortOrder } as any);
         const desc = songs ? (Array.isArray(songs) ? String(songs.length) : 'non-array') : 'null';
-        songloft.log.info(`[PlaylistManager] loadPlaylistSongs playlistId=${playlistId} returned=${desc}${retry ? ' (retry)' : ''}`);
+        songloft.log.info(`[PlaylistManager] loadPlaylistSongs playlistId=${playlistId} sort=${sortBy} order=${sortOrder} returned=${desc}${retry ? ' (retry)' : ''}`);
         if (!songs || !Array.isArray(songs)) {
           songloft.log.error('[PlaylistManager] Bridge returned invalid data for playlist: ' + playlistId);
           return false;
@@ -1483,10 +1496,21 @@ export class PlaylistManagerMap {
 
       // 使用 songloft.playlists.getSongs 桥接调用加载歌单歌曲
       let songs: Song[] = [];
+      let sortBy = '';
+      let sortOrder = '';
       try {
-        const result = await songloft.playlists.getSongs(devCfg.playlist_id, { limit: 100000 });
+        const pl: any = await songloft.playlists.getById(devCfg.playlist_id);
+        if (pl && pl.sort_by) {
+          sortBy = pl.sort_by;
+          sortOrder = pl.sort_order || 'asc';
+        }
+      } catch (e) {
+        songloft.log.warn(`[PlaylistManagerMap] restoreFromConfig: getById for sort failed: ${String(e)}`);
+      }
+      try {
+        const result = await songloft.playlists.getSongs(devCfg.playlist_id, { limit: 100000, sort: sortBy, order: sortOrder } as any);
         const desc = result ? (Array.isArray(result) ? String(result.length) : 'non-array') : 'null';
-        songloft.log.info(`[PlaylistManagerMap] restoreFromConfig playlistId=${devCfg.playlist_id} songs=${desc}`);
+        songloft.log.info(`[PlaylistManagerMap] restoreFromConfig playlistId=${devCfg.playlist_id} sort=${sortBy} order=${sortOrder} songs=${desc}`);
         if (result && Array.isArray(result)) {
           songs = result as any;
         }
