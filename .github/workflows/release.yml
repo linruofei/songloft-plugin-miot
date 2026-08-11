@@ -78,6 +78,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Build frontend
+        run: cd frontend && npm install && npx vite build
+
       - name: Resolve version
         id: version
         run: |
