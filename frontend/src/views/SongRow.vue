@@ -64,7 +64,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="song-row" :class="{ 'song-row-current': isCurrent() }">
+  <div class="song-row" :class="{ 'song-row-current': isCurrent() }" @click="emit('play', song, index)">
     <div class="song-index">
       <SlIcon v-if="isCurrent() && state.player.is_playing" name="equalizer" :size="18" />
       <span v-else>{{ index + 1 }}</span>
@@ -85,7 +85,7 @@ onUnmounted(() => {
       <span class="song-meta">{{ song.artist || '未知艺术家' }}<span v-if="song.album"> · {{ song.album }}</span><span v-if="duration(song.duration)"> · {{ duration(song.duration) }}</span></span>
     </div>
     <div class="song-actions">
-      <SlButton variant="icon" icon="play_arrow" title="播放此曲" @click="emit('play', song, index)" />
+      <SlButton variant="icon" icon="play_arrow" title="播放此曲" @click.stop="emit('play', song, index)" />
     </div>
   </div>
 </template>
