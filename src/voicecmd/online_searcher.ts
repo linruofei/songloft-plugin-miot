@@ -4,7 +4,7 @@
 /// <reference types="@songloft/plugin-sdk" />
 
 import { MinaService } from '../service/service';
-import { getHostAPIBaseUrl } from '../utils/http';
+import { getHostAPIBaseUrl, getHostBaseUrl } from '../utils/http';
 import { URLBuilder, playbackOptionsOf } from '../player/url_builder';
 import { ConfigManager } from '../config/manager';
 import { IndexingManager } from '../indexing/manager';
@@ -136,6 +136,51 @@ export class OnlineSearcher {
   }
 
   /**
+   * 判断直链是否音箱可直接播放。音箱（player_play_url）只可靠播放 mp3；
+   * webm/opus/ogg/flac/mka/mkv/m4a/wav 等需经 songloft 转码代理（/proxy/transcode）。
+   * 判据：URL 的 mime 查询参数（youtube CDN 带 mime=audio/webm）优先，否则看扩展名。
+   */
+  private isSpeakerPlayableUrl(rawUrl: string): boolean {
+    let u: URL;
+    try {
+      u = new URL(rawUrl);
+    } catch {
+      return false;
+    }
+    const mime = (u.searchParams.get('mime') || '').toLowerCase();
+    if (mime === 'audio/mpeg' || mime === 'audio/mp3') return true;
+    if (mime.startsWith('audio/')) return false; // webm/opus/ogg/flac/mp4/aac/mka 等
+    const ext = (u.pathname.split('.').pop() || '').toLowerCase();
+    return ext === 'mp3'; // 无 mime（如 go-music-dl 的 .mp3 直链）→ 仅 .mp3 直推
+  }
+
+  /**
+   * 解析 no-import 直推 URL：可直接播的原样返回；不可播的构造 songloft 转码代理 URL
+   * （/api/v1/proxy/transcode，服务端 ffmpeg 实时转 mp3 流式返回，不入库不落盘）。
+   *
+   * access_token 必须是首个查询参数——部分音箱固件会把 URL 里的 & 替换为空格，
+   * 导致后续参数被合并进 token 值（见 url_builder.ts 同款处理）。URLSearchParams
+   * 按 set 顺序输出，故先 set access_token。url 值会被自动 percent-encode，
+   * youtube 直链里的 & 不会污染参数分隔。
+   */
+  private async resolveDirectPushUrl(directUrl: string, duration?: number): Promise<string> {
+    if (this.isSpeakerPlayableUrl(directUrl)) return directUrl;
+    const base = await getHostBaseUrl(); // 音箱可达地址（server_host），非 loopback 的 getHostAPIBaseUrl
+    if (!base) {
+      // server_host 未配：无法构造转码 URL，回退原样（大概率播不出，但不构造坏 URL）
+      songloft.log.warn('[OnlineSearcher] server_host 未配置，无法走转码代理，原样直推（可能无法解码）');
+      return directUrl;
+    }
+    const token = await songloft.plugin.getToken();
+    const params = new URLSearchParams();
+    params.set('access_token', token); // 必须第一
+    params.set('url', directUrl);
+    params.set('format', 'mp3');
+    if (duration && duration > 0) params.set('duration', String(duration));
+    return `${base}/api/v1/proxy/transcode?${params.toString()}`;
+  }
+
+  /**
    * 在线搜索歌曲：并发向所有启用源派发请求，但严格按列表顺序采纳结果
    * （源0 命中即用源0，否则看源1……）。仅返回候选，不导入也不播放。
    *
@@ -250,22 +295,25 @@ export class OnlineSearcher {
     const isDirectLink = directUrl.startsWith('http://') || directUrl.startsWith('https://');
     if (config.external_search_no_import) {
       if (isDirectLink) {
+        // 音箱只可靠播放 mp3；webm/opus 等不可解码格式走 songloft 转码代理（songloft-org/songloft#394）
+        const pushUrl = await this.resolveDirectPushUrl(directUrl, song.duration);
+        const transcoded = pushUrl !== directUrl;
         const songName = song.artist ? `${song.title}-${song.artist}` : song.title;
-        songloft.log.info('[OnlineSearcher] [Diag] No-import direct push: songName="' + songName + '" url="' + directUrl + '"');
-        const played = await minaService.playURL(accountId, deviceId, directUrl, {
+        songloft.log.info('[OnlineSearcher] [Diag] No-import direct push: songName="' + songName + '" url="' + pushUrl + '"' + (transcoded ? ' (transcoded)' : ''));
+        const played = await minaService.playURL(accountId, deviceId, pushUrl, {
           title: song.title,
           artist: song.artist,
         });
         if (!played) {
-          songloft.log.error('[OnlineSearcher] No-import: failed to push URL to device: ' + directUrl);
+          songloft.log.error('[OnlineSearcher] No-import: failed to push URL to device: ' + pushUrl);
           return false;
         }
         // 分组同步：让组内其他成员播放同一 URL
-        await this.groupCoordinator?.fanOutPlayURL(accountId, deviceId, directUrl, {
+        await this.groupCoordinator?.fanOutPlayURL(accountId, deviceId, pushUrl, {
           title: song.title,
           artist: song.artist,
         });
-        songloft.log.info('[OnlineSearcher] Playing online song (no-import): ' + song.title + ' - ' + song.artist + ' url=' + directUrl);
+        songloft.log.info('[OnlineSearcher] Playing online song (no-import)' + (transcoded ? ' [transcoded]' : '') + ': ' + song.title + ' - ' + song.artist + ' url=' + pushUrl);
         return true;
       }
       songloft.log.info('[OnlineSearcher] No-import enabled but result is resolution-type (no direct url), falling back to import: ' + song.title);
