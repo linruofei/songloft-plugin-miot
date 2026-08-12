@@ -218,6 +218,7 @@ export interface TaskParams {
   playlist_name?: string;
   playlist_id?: number;
   song_name?: string;      // 用于 play_playlist_from 指定起始歌曲
+  song_id?: number;        // 用于 play_playlist_from 按 ID 指定起始歌曲（前端选择器产出）
   start_position?: StartPosition; // 用于 play_playlist 指定起始位置,缺省=first
   play_mode?: string;      // 空串表示「跟随上次」(沿用设备持久化的播放模式)
   volume?: number;

@@ -291,8 +291,7 @@ export class TaskExecutor {
    * 播放模式：params.play_mode 指定则用它；为空表示「跟随上次」→ 用设备持久化模式；再兜底 order。
    */
   private async executePlayPlaylist(target: DeviceTarget, params: TaskParams, withSong: boolean): Promise<string> {
-    const playlistName = params.playlist_name;
-    if (!playlistName) {
+    if (!params.playlist_name && !params.playlist_id) {
       throw new Error('未指定歌单名称');
     }
 
@@ -300,13 +299,15 @@ export class TaskExecutor {
       throw new Error('歌曲索引尚未就绪，请确保已刷新索引');
     }
 
-    // 通过名称查找歌单
-    const playlist = this.indexingManager.findPlaylistByName(playlistName);
+    // 通过名称或 ID 查找歌单（前端选择器产出 playlist_id，语音口令产出 playlist_name）
+    let playlist = params.playlist_name
+      ? this.indexingManager.findPlaylistByName(params.playlist_name)
+      : this.indexingManager.getPlaylistById(params.playlist_id!);
     if (!playlist) {
-      throw new Error(`未找到匹配的歌单: ${playlistName}`);
+      throw new Error(`未找到匹配的歌单: ${params.playlist_name || params.playlist_id}`);
     }
 
-    songloft.log.info(`[TaskExecutor] 匹配到歌单 name=${playlistName} matched=${playlist.name} id=${playlist.id}`);
+    songloft.log.info(`[TaskExecutor] 匹配到歌单 name=${params.playlist_name || ''} id=${playlist.id} matched=${playlist.name}`);
 
     // 读取设备持久化状态，供「从上次进度继续」和「跟随上次播放模式」使用
     const devCfg = await this.getDeviceConfig(target);
@@ -317,7 +318,7 @@ export class TaskExecutor {
     // 计算给定歌单 ID 下的起始位置（歌单 ID 失效重试时会用新 ID 再算一次）
     const resolveStart = async (pid: number): Promise<{ startIndex: number; randomStart: boolean }> => {
       if (withSong) {
-        // play_playlist_from：按 song_name 定位起始歌曲
+        // play_playlist_from：按 song_name 或 song_id 定位起始歌曲
         let idx = 0;
         if (params.song_name) {
           const result = await this.indexingManager.findSongInPlaylist(pid, params.song_name);
@@ -326,6 +327,14 @@ export class TaskExecutor {
             songloft.log.info(`[TaskExecutor] 匹配到歌曲 song_name=${params.song_name} index=${idx}`);
           } else {
             songloft.log.warn(`[TaskExecutor] 未找到匹配的歌曲，从第一首开始 song_name=${params.song_name}`);
+          }
+        } else if (params.song_id) {
+          const result = await this.indexingManager.findSongIndexInPlaylistById(pid, params.song_id);
+          if (result.found) {
+            idx = result.index;
+            songloft.log.info(`[TaskExecutor] 匹配到歌曲 song_id=${params.song_id} index=${idx}`);
+          } else {
+            songloft.log.warn(`[TaskExecutor] 未找到匹配的歌曲，从第一首开始 song_id=${params.song_id}`);
           }
         }
         return { startIndex: idx, randomStart: false };
@@ -349,7 +358,7 @@ export class TaskExecutor {
 
     // 描述起始位置（用于返回给日志/前端的友好文案）
     const describeStart = (start: { startIndex: number; randomStart: boolean }): string => {
-      if (withSong && params.song_name) return `（从「${params.song_name}」开始）`;
+      if (withSong && (params.song_name || params.song_id)) return `（从「${params.song_name || '#' + params.song_id}」开始）`;
       if (start.randomStart) return '（随机起始）';
       if (params.start_position === 'resume' && start.startIndex > 0) return '（从上次进度继续）';
       return '';
@@ -367,7 +376,7 @@ export class TaskExecutor {
         // 用已匹配到的规范歌单名精确重查（比原始参数更稳，能命中改了 ID 的同名歌单）
         const newPlaylist = this.indexingManager.findPlaylistByName(playlist.name);
         if (!newPlaylist) {
-          throw new Error(`刷新索引后仍未找到歌单: ${playlistName}`);
+          throw new Error(`刷新索引后仍未找到歌单: ${playlist.name}`);
         }
         const retryStart = await resolveStart(newPlaylist.id);
         const retryOk = await pm.play(newPlaylist.id, retryStart.startIndex, playMode, { randomStart: retryStart.randomStart });

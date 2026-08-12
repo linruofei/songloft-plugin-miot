@@ -886,6 +886,24 @@ export class IndexingManager {
   }
 
   /**
+   * 按歌曲 ID 在指定歌单中查找索引位置
+   */
+  async findSongIndexInPlaylistById(playlistId: number, songId: number): Promise<{ index: number; found: boolean }> {
+    if (!this.indexReady || !songId) {
+      return { index: 0, found: false };
+    }
+
+    await this.waitForPlaylistCache();
+
+    const songs = this.playlistSongsCache.get(playlistId) ?? [];
+    const idx = songs.findIndex(s => s.id === songId);
+    if (idx >= 0) {
+      return { index: idx, found: true };
+    }
+    return { index: 0, found: false };
+  }
+
+  /**
    * 按歌曲名称模糊匹配，返回歌曲位置信息（歌单ID + 索引）
    * 参考 Go 版本: indexing/manager.go FindSongByName
    * @param songName - 歌曲名称关键词
