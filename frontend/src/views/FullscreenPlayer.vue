@@ -332,12 +332,6 @@ watch(activeLyric, centerActiveLyric);
               :disabled="state.playerBusy"
               @change="setPlayMode"
             />
-            <PlayerSpeedPopup
-              :model-value="Number(state.player.speed || 1)"
-              popup-id="full-speed"
-              :disabled="state.playerBusy"
-              @change="setPlaybackSpeed"
-            />
             <SlButton variant="icon" icon="skip_previous" player-icon :icon-size="38" class="player-control-button" title="上一首" :disabled="state.playerBusy" @click="playerCommand('/player/previous')" />
             <SlButton
               class="control-primary"
@@ -383,9 +377,8 @@ watch(activeLyric, centerActiveLyric);
               @change="setPlayMode"
             />
             <PlayerSpeedPopup
-              class="fullscreen-tool-desktop"
               :model-value="Number(state.player.speed || 1)"
-              popup-id="full-speed-desktop"
+              popup-id="full-speed"
               :disabled="state.playerBusy"
               @change="setPlaybackSpeed"
             />

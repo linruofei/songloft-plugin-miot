@@ -180,17 +180,34 @@ html.webf-engine .miot-app * { transform-origin: 0 0; }
 .song-meta { color: var(--md-on-surface-variant); font-size: 12px; }
 .song-actions { display: flex; align-items: center; gap: 2px; }
 .song-row-current .song-title { font-weight: 500; }
-.player-bar-shell { position: fixed; z-index: 80; right: 0; bottom: 0; left: 0; height: calc(66px + var(--sl-safe-bottom, 0px)); padding-bottom: var(--sl-safe-bottom, 0px); background: var(--md-surface); box-shadow: var(--md-shadow-2); }
-.player-bar { box-sizing: border-box; width: 100%; max-width: 1200px; height: 64px; display: flex; align-items: center; gap: 12px; margin: 0 auto; padding: 0 12px; background: var(--md-surface); cursor: pointer; }
-.player-bar:focus-visible { outline: 2px solid var(--md-primary); outline-offset: -2px; }
-.player-cover { width: 48px; height: 48px; flex: 0 0 48px; border-radius: var(--md-radius-sm); object-fit: cover; background: var(--md-surface-container-high); }
+.player-bar-shell { position: fixed; z-index: 80; right: 0; bottom: 0; left: 0; height: calc(90px + var(--sl-safe-bottom, 0px)); padding-bottom: var(--sl-safe-bottom, 0px); background: var(--md-surface); border-top: 1px solid var(--md-outline-variant); }
+.player-bar-progress { width: 100%; height: 16px; display: flex; align-items: center; cursor: pointer; }
+.player-bar-progress-track { width: 100%; height: 4px; background: var(--md-surface-container-highest); position: relative; }
+.player-bar-progress-fill { height: 100%; background: var(--md-primary); pointer-events: none; }
+.player-bar-progress-thumb { position: absolute; top: 50%; width: 10px; height: 10px; border-radius: 50%; background: var(--md-primary); transform: translate(-50%, -50%); pointer-events: none; box-shadow: var(--md-shadow-1); }
+.player-bar-progress:hover .player-bar-progress-track { height: 6px; }
+.player-bar-progress:hover .player-bar-progress-thumb { width: 14px; height: 14px; }
+.player-bar { box-sizing: border-box; width: 100%; max-width: 1200px; height: 73px; display: flex; align-items: center; gap: 16px; margin: 0 auto; padding: 0 16px; background: var(--md-surface); }
+.player-bar-left { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 3; }
+.player-bar-info { display: flex; align-items: center; gap: 12px; min-width: 0; flex: 1; cursor: pointer; }
+.player-bar-info:focus-visible { outline: 2px solid var(--md-primary); outline-offset: -2px; border-radius: var(--md-radius-sm); }
+.player-bar-favorite { flex: 0 0 auto; }
+.player-cover { width: 56px; height: 56px; flex: 0 0 56px; border-radius: var(--md-radius-sm); object-fit: cover; background: var(--md-surface-container-high); }
 .player-copy { min-width: 0; flex: 1; }
 .player-title, .player-subtitle { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .player-title { font-size: 14px; font-weight: 500; }
-.player-subtitle { color: var(--md-on-surface-variant); font-size: 12px; }
-.player-controls { display: flex; align-items: center; gap: 0; }
-.player-controls .sl-button-icon { width: 36px; height: 40px; min-height: 40px; }
-.mini-play-control.sl-button-icon { width: 44px; height: 44px; color: var(--md-primary); }
+.player-subtitle { color: var(--md-on-surface-variant); font-size: 12px; margin-top: 2px; }
+.player-bar-center { display: flex; flex-direction: column; align-items: center; gap: 4px; flex: 4; }
+.player-bar-center-controls { display: flex; align-items: center; gap: 8px; }
+.player-bar-center-controls .sl-button-icon { width: 40px; height: 40px; min-height: 40px; }
+.bar-play-primary.sl-button-icon { width: 40px; height: 40px; min-height: 40px; border-radius: 50%; background: var(--md-primary); color: var(--md-on-primary); box-shadow: var(--md-shadow-2); }
+.player-bar-time { display: flex; align-items: center; gap: 0; font-size: 12px; color: var(--md-on-surface-variant); }
+.player-bar-time-sep { margin: 0 3px; }
+.player-bar-tools { display: flex; align-items: center; justify-content: flex-end; gap: 0; flex: 3; }
+.player-bar-tools > .player-popup-anchor, .player-bar-tools > .sl-button-icon { width: 36px; height: 36px; }
+.player-volume-inline { display: flex; align-items: center; gap: 0; flex: 0 1 160px; min-width: 100px; }
+.player-volume-inline .sl-button-icon { width: 36px; height: 36px; flex: 0 0 auto; }
+.player-volume-inline-slider { flex: 1; min-width: 0; }
 .player-control-active { color: var(--md-primary); }
 .player-favorite-button.player-control-active { color: #f44336; }
 .player-favorite-button.player-control-active .sl-icon { font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
@@ -439,7 +456,21 @@ html.webf-engine .settings-nav { height: calc(100vh - 56px); }
   .miot-main-appbar-inner, .settings-appbar-inner, .fullscreen-appbar-inner { padding: 0 12px; }
   .player-toolbar { display: block; }
   .toolbar-divider { display: none; }
-  .player-bar { gap: 10px; }
+  .player-bar-shell { height: calc(66px + var(--sl-safe-bottom, 0px)); border-top: none; box-shadow: var(--md-shadow-2); }
+  .player-bar-progress { height: 2px; cursor: default; pointer-events: none; }
+  .player-bar-progress-track { height: 100%; }
+  .player-bar-progress-thumb { display: none; }
+  .player-bar { height: 64px; gap: 0; padding: 0 12px; }
+  .player-bar-left { flex: 1; gap: 0; }
+  .player-bar-info { gap: 12px; }
+  .player-bar .player-bar-favorite { display: none; }
+  .player-cover { width: 48px; height: 48px; flex: 0 0 48px; }
+  .player-bar-center { flex: 0 0 auto; flex-direction: row; gap: 0; }
+  .player-bar-center-controls { gap: 0; }
+  .player-bar-center-controls .sl-button-icon { width: 36px; height: 40px; min-height: 40px; padding: 0; }
+  .bar-play-primary.sl-button-icon { width: 44px; height: 44px; min-height: 44px; background: transparent; color: var(--md-primary); box-shadow: none; }
+  .player-bar-time { display: none; }
+  .player-bar-tools { display: none; }
   .field-grid { grid-template-columns: 1fr; }
   .setting-row { padding-left: 16px; padding-right: 16px; }
   .form-body { padding-left: 16px; padding-right: 16px; }
@@ -475,7 +506,7 @@ html.webf-engine .settings-nav { height: calc(100vh - 56px); }
   .fullscreen-controls-mobile > .player-popup-anchor, .fullscreen-controls-mobile > .sl-button-icon { width: 48px; height: 48px; }
   .fullscreen-controls-mobile .control-primary.sl-button { width: 76px; height: 76px; border-radius: 28px; box-shadow: var(--md-shadow-2); }
   .fullscreen-tool-desktop { display: none; }
-  .fullscreen-tools { width: 168px; min-height: 40px; margin-top: 4px; }
+  .fullscreen-tools { width: 208px; min-height: 40px; margin-top: 4px; }
   .fullscreen-tools > .player-popup-anchor, .fullscreen-tools > .sl-button-icon { width: 40px; height: 40px; }
   .settings-shell { padding: 24px 12px calc(28px + var(--sl-safe-bottom, 0px)); }
   .settings-layout { display: block; }
