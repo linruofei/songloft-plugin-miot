@@ -38,7 +38,9 @@ onUnmounted(disposeStore);
     </div>
     <template v-else>
       <SettingsPage v-if="navigation.page === 'settings'" />
-      <FullscreenPlayer v-show="navigation.page === 'player'" />
+      <KeepAlive>
+        <FullscreenPlayer v-if="navigation.page === 'player'" />
+      </KeepAlive>
       <MainPage v-if="navigation.page !== 'settings' && navigation.page !== 'player'" />
     </template>
     <Snackbar />

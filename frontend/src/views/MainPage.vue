@@ -14,7 +14,6 @@ import { navigation, openPage } from '../runtime';
 import { currentDevice, deviceName, messageOf, playSong, refreshAll, selectPlaylist, state, visibleSongs } from '../store';
 import type { SelectOption, Song } from '../types';
 
-const showDevicePicker = ref(false);
 const search = ref('');
 const songRenderLimit = ref(20);
 const songRenderBatchSize = 40;
@@ -57,7 +56,7 @@ function loadMoreSongs(event: Event): void {
 }
 function openDevicePicker() {
   openSelect.value = null;
-  showDevicePicker.value = true;
+  navigation.devicePickerOpen = true;
 }
 async function play(song: Song, index: number) {
   try { await playSong(song, index); } catch (error) { /* store already presents the error */ notifyLocal(error); }
@@ -132,7 +131,7 @@ onUnmounted(() => {
 
     <div v-if="state.selectedPlaylistId" class="search-bar">
       <SlIcon name="search" :size="20" />
-      <SlInput v-model="search" aria-label="搜索歌曲" placeholder="搜索歌曲、艺术家或专辑" @update:model-value="state.songSearch = search" />
+      <SlInput :model-value="search" aria-label="搜索歌曲" placeholder="搜索歌曲、艺术家或专辑" @update:model-value="(v) => { search = v; state.songSearch = v; }" />
       <SlButton v-if="search" variant="icon" icon="close" title="清除搜索" @click="search = ''; state.songSearch = ''" />
       <SlButton variant="icon" icon="my_location" title="定位当前播放" @click="locateCurrentSong" />
     </div>
@@ -148,5 +147,5 @@ onUnmounted(() => {
     <PlayerBar />
 
   </main>
-  <DevicePicker v-if="showDevicePicker" @close="showDevicePicker = false" />
+  <DevicePicker v-if="navigation.devicePickerOpen" @close="navigation.devicePickerOpen = false" />
 </template>

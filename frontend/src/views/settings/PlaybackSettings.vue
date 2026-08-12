@@ -10,6 +10,7 @@ import { messageOf, notify, saveConfig, state } from '../../store';
 import type { SelectOption } from '../../types';
 
 const transition = ref(String(state.config.song_transition_offset));
+const announcementDelay = ref(String(state.config.play_announcement_delay));
 const coverOptions: Array<SelectOption & { image: string }> = [
   { value: '1732418460076477549', label: 'LOFT·浮光海岸', image: 'https://p1.music.126.net/y06BHfRn9piijiVWfnP0-Q==/109951166970458072.jpg' },
   { value: '1674532961410650324', label: 'LOFT·海隅', image: 'https://p1.music.126.net/_zoAgg0syiZnUDov2H7Drw==/109951162812527373.jpg' },
@@ -33,6 +34,7 @@ const coverPreview = computed(() => coverOptions.find((option) => option.value =
 async function saveNumber(key: 'song_transition_offset' | 'play_announcement_delay' | 'smart_resume_timeout' | 'conversation_poll_interval' | 'max_song_index' | 'external_search_timeout' | 'voice_memory_max_records', raw: string, min: number, max: number) {
   const value = Math.max(min, Math.min(max, Number.parseInt(raw, 10) || min));
   if (key === 'song_transition_offset') transition.value = String(value);
+  if (key === 'play_announcement_delay') announcementDelay.value = String(value);
   try { await saveConfig({ [key]: value }); } catch (error) { notify(messageOf(error), 'error'); }
 }
 function setSwitch(key: keyof typeof state.config, value: boolean) { void saveConfig({ [key]: value } as never); }
@@ -58,6 +60,6 @@ function setSwitch(key: keyof typeof state.config, value: boolean) { void saveCo
     <SettingRow title="搜索提示播报" subtitle="语音搜索时先播报提示文字"><SlSwitch :model-value="state.config.interrupt_tts_hint_enabled" @update:model-value="setSwitch('interrupt_tts_hint_enabled', $event)" /></SettingRow>
     <div v-if="state.config.interrupt_tts_hint_enabled" class="form-body"><div class="field"><label class="field-label">提示文字</label><SlInput :model-value="state.config.interrupt_tts_hint_text" aria-label="搜索提示文字" @update:model-value="state.config.interrupt_tts_hint_text = $event" @change="saveConfig({ interrupt_tts_hint_text: state.config.interrupt_tts_hint_text })" /></div></div>
     <SettingRow title="播放公告" subtitle="播放前播报歌曲名称"><SlSwitch :model-value="state.config.play_announcement_enabled" @update:model-value="setSwitch('play_announcement_enabled', $event)" /></SettingRow>
-    <div v-if="state.config.play_announcement_enabled" class="form-body"><div class="field"><label class="field-label">公告模板</label><SlInput :model-value="state.config.play_announcement_template" aria-label="播放公告模板" @update:model-value="state.config.play_announcement_template = $event" @change="saveConfig({ play_announcement_template: state.config.play_announcement_template })" /><p class="field-help">可用占位符：{artist}、{song}。</p></div><div class="field"><label class="field-label">公告等待时间（秒）</label><SlInput :model-value="String(state.config.play_announcement_delay)" type="number" aria-label="公告等待时间" @update:model-value="saveNumber('play_announcement_delay', $event, 0, 30)" /></div></div>
+    <div v-if="state.config.play_announcement_enabled" class="form-body"><div class="field"><label class="field-label">公告模板</label><SlInput :model-value="state.config.play_announcement_template" aria-label="播放公告模板" @update:model-value="state.config.play_announcement_template = $event" @change="saveConfig({ play_announcement_template: state.config.play_announcement_template })" /><p class="field-help">可用占位符：{artist}、{song}。</p></div><div class="field"><label class="field-label">公告等待时间（秒）</label><SlInput :model-value="announcementDelay" type="number" aria-label="公告等待时间" @update:model-value="announcementDelay = $event" @change="saveNumber('play_announcement_delay', announcementDelay, 0, 30)" /></div></div>
   </SectionCard>
 </template>

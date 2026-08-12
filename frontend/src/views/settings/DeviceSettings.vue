@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import SectionCard from '../../ui/SectionCard.vue';
 import SettingRow from '../../ui/SettingRow.vue';
 import SlButton from '../../ui/SlButton.vue';
@@ -8,6 +8,7 @@ import SlInput from '../../ui/SlInput.vue';
 import SlSelect from '../../ui/SlSelect.vue';
 import SlSwitch from '../../ui/SlSwitch.vue';
 import { postEnvelope } from '../../api';
+import { navigation } from '../../runtime';
 import { deviceId, deviceName, confirmAction, deleteGroup, loadAccountsAndDevices, loadGroups, messageOf, saveConfig, saveGroup, state, toggleManaged, notify } from '../../store';
 import type { DeviceGroup, DeviceMember, SelectOption } from '../../types';
 
@@ -49,7 +50,11 @@ onMounted(() => {
   extraModels.value = state.config.extra_music_api_models.join(', ');
   void Promise.all([loadAccountsAndDevices(), loadGroups()]);
 });
-onUnmounted(() => { if (qrTimer) clearInterval(qrTimer); });
+watch(groupEditor, (open) => { navigation.editorOpen = open; });
+onUnmounted(() => {
+  navigation.editorOpen = false;
+  if (qrTimer) clearInterval(qrTimer);
+});
 
 async function saveServerHost() {
   const host = (isCustomHost.value ? customHost.value : serverChoice.value).trim();

@@ -14,6 +14,16 @@
   src: url('./assets/fonts/material-icons-player.otf') format('opentype');
 }
 
+/* 通用 UI 图标：子集自官方 Material Symbols Outlined，按码点渲染，
+   不依赖 webf 不支持的 ligature，避免非播放器图标显示成字面文本。 */
+@font-face {
+  font-family: 'Miot UI Icons';
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url('./assets/fonts/miot-ui-icons.otf') format('opentype');
+}
+
 * { box-sizing: border-box; }
 html, body, #app { min-height: 100%; }
 body {
@@ -103,6 +113,11 @@ html.webf-engine .miot-app * { transform-origin: 0 0; }
 .sl-select-trigger .sl-button-label { min-width: 0; flex: 1; overflow: hidden; color: var(--md-on-surface); font-weight: 400; text-align: left; text-overflow: ellipsis; }
 .sl-select-trigger .sl-icon { flex-shrink: 0; color: var(--md-on-surface-variant); }
 .sl-select-panel { position: absolute; z-index: 70; top: calc(100% + 4px); left: 0; box-sizing: border-box; max-height: 320px; overflow-y: auto; padding: 4px 0; border: 1px solid var(--md-outline-variant); border-radius: var(--md-radius-sm); background: var(--md-surface-container); box-shadow: var(--md-shadow-2); }
+.sl-select-panel-fixed { position: fixed; z-index: 300; top: auto; left: auto; }
+/* 透明全屏遮罩：webf 不会对「点空白处」派发 document pointerdown，
+   纯靠 document 监听收不起下拉。挂一个 fixed 遮罩兜住所有面板外的点击，
+   点击它即关闭（点面板本身由面板的 z-index 更高命中、走选中逻辑）。 */
+.sl-select-backdrop { position: fixed; inset: 0; z-index: 200; background: transparent; }
 .sl-select-option { min-height: 40px; padding: 10px 12px; color: var(--md-on-surface); font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sl-select-option:hover { background: var(--md-surface-container-high); }
 .sl-select-option-on { background: var(--md-secondary-container); color: var(--md-on-secondary-container); }
@@ -183,6 +198,11 @@ html.webf-engine .miot-app * { transform-origin: 0 0; }
 .player-tool-button { color: var(--md-on-surface-variant); }
 .material-symbols-outlined.sl-icon-material-player {
   font-family: 'Material Icons Player';
+  font-feature-settings: normal;
+  -webkit-font-feature-settings: normal;
+}
+.material-symbols-outlined.sl-icon-ui {
+  font-family: 'Miot UI Icons';
   font-feature-settings: normal;
   -webkit-font-feature-settings: normal;
 }

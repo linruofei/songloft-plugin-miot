@@ -87,6 +87,7 @@ const searchPriorityOptions: SelectOption[] = [
 const pollInterval = ref(String(state.config.conversation_poll_interval));
 const maxIndex = ref(String(state.config.max_song_index));
 const maxMemory = ref(String(state.config.voice_memory_max_records));
+const externalSearchTimeout = ref(String(state.config.external_search_timeout));
 const webhookName = ref('');
 const webhookUrl = ref('');
 const commandInputs = reactive<Record<string, string>>({});
@@ -644,7 +645,7 @@ async function deleteMemoryRecord(id?: string): Promise<void> {
     <div v-if="!state.config.voice_command_enabled" class="dependency-hint"><SlIcon name="warning" :size="18" /><span>需要先开启“语音口令”才能使用外部搜索。</span></div>
     <div class="form-body">
       <div class="field"><label class="field-label">搜索优先级</label><SlSelect :model-value="state.config.search_priority" :options="searchPriorityOptions" aria-label="搜索优先级" @update:model-value="saveConfig({ search_priority: $event as 'parallel' | 'local_first' | 'external_first' })" /></div>
-      <div class="field-grid"><div class="field"><label class="field-label">超时（秒）</label><SlInput :model-value="String(state.config.external_search_timeout)" type="number" @update:model-value="saveConfig({ external_search_timeout: Math.max(3, Math.min(60, Number($event) || 6)) })" /></div><div class="field setting-field-control"><label class="field-label">不入库直接播放</label><SlSwitch :model-value="state.config.external_search_no_import" @update:model-value="setSwitch('external_search_no_import', $event)" /></div></div>
+      <div class="field-grid"><div class="field"><label class="field-label">超时（秒）</label><SlInput :model-value="externalSearchTimeout" type="number" aria-label="外部搜索超时" @update:model-value="externalSearchTimeout = $event" @change="saveConfig({ external_search_timeout: Math.max(3, Math.min(60, Number(externalSearchTimeout) || 6)) })" /></div><div class="field setting-field-control"><label class="field-label">不入库直接播放</label><SlSwitch :model-value="state.config.external_search_no_import" @update:model-value="setSwitch('external_search_no_import', $event)" /></div></div>
       <h3 class="card-title">已安装搜索源</h3>
       <div class="field-grid">
         <div class="field">

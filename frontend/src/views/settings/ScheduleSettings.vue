@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import SectionCard from '../../ui/SectionCard.vue';
 import SettingRow from '../../ui/SettingRow.vue';
 import SlButton from '../../ui/SlButton.vue';
@@ -8,6 +8,7 @@ import SlInput from '../../ui/SlInput.vue';
 import SlSelect from '../../ui/SlSelect.vue';
 import SlSlider from '../../ui/SlSlider.vue';
 import SlSwitch from '../../ui/SlSwitch.vue';
+import { navigation } from '../../runtime';
 import { confirmAction, deleteSchedule, loadScheduleLogs, loadSchedules, managedDevices, messageOf, notify, saveConfig, saveSchedule, state, toggleSchedule } from '../../store';
 import type { ScheduleType, ScheduledTask, SelectOption } from '../../types';
 
@@ -44,6 +45,7 @@ const playlistOptions = computed(() => state.playlists.map((playlist) => ({ valu
 const songOptions = computed(() => state.songs.map((song) => ({ value: String(song.id), label: `${song.title}${song.artist ? ` · ${song.artist}` : ''}` })));
 
 onMounted(() => { void Promise.all([loadSchedules(), loadScheduleLogs()]); });
+watch(editor, (open) => { navigation.editorOpen = open; });
 function resetEditor() { editingId.value = ''; name.value = ''; action.value = 'play_playlist'; playlistId.value = ''; songId.value = ''; playMode.value = ''; startPosition.value = 'first'; volume.value = 50; scheduleType.value = 'weekly'; time.value = '08:00'; weekdays.value = [1, 2, 3, 4, 5]; monthdays.value = [1]; holidayMode.value = 'ignore'; allManaged.value = true; targetMembers.value = []; editor.value = true; }
 function editTask(task: ScheduledTask) { editingId.value = task.id || ''; name.value = task.name; action.value = task.action; playlistId.value = String(task.params.playlist_id || ''); songId.value = String(task.params.song_id || ''); playMode.value = String(task.params.play_mode || ''); startPosition.value = String(task.params.start_position || 'first'); volume.value = Number(task.params.volume ?? 50); scheduleType.value = task.schedule.type; time.value = task.schedule.time; weekdays.value = [...(task.schedule.weekdays || [])]; monthdays.value = [...(task.schedule.monthdays || [])]; holidayMode.value = task.schedule.holiday_mode || 'ignore'; allManaged.value = !!task.target.all_managed; targetMembers.value = (task.target.devices || []).map((item) => `${item.account_id}:${item.device_id}`); editor.value = true; }
 function toggleDay(list: number[], day: number) { const index = list.indexOf(day); if (index >= 0) list.splice(index, 1); else list.push(day); }

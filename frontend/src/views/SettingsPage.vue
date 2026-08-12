@@ -25,6 +25,7 @@ const appbarTitle = computed(() => isNarrow.value && navigation.settingsCategory
 const settingsBody = ref<HTMLElement | null>(null);
 function resetSettingsViewport(): void {
   openSelect.value = null;
+  navigation.editorOpen = false;
   settingsBody.value?.scrollTo?.(0, 0);
   if (settingsBody.value) settingsBody.value.scrollTop = 0;
 }
