@@ -37,6 +37,7 @@ function update(event: Event): void {
 }
 
 function commit(event: Event): void {
+  if (!dragging.value) return;
   dragPosition.value = valueFrom(event);
   dragging.value = false;
   emit('seek', dragPosition.value);
