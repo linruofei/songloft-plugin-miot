@@ -4,6 +4,7 @@
 import { jsonResponse, parseQuery } from '@songloft/plugin-sdk';
 import type { Router, HTTPRequest } from '@songloft/plugin-sdk';
 import { ConversationMonitor } from '../conversation/monitor';
+import { toConversationViewModel } from '../conversation/viewmodel';
 import { ConfigManager } from '../config/manager';
 
 /** 解析请求体（兼容 Uint8Array 和 string） */
@@ -40,7 +41,7 @@ export function registerConversationHandlers(
       const limit = query.limit ? Number(query.limit) : 50;
       const sinceMs = query.since ? Number(query.since) : 0;
 
-      const messages = conversationMonitor.getMessages(limit, sinceMs);
+      const messages = conversationMonitor.getMessages(limit, sinceMs).map(toConversationViewModel);
       return jsonResponse({ success: true, data: messages, count: messages.length });
     } catch (e: any) {
       return jsonResponse({ success: false, error: e.message || String(e) });

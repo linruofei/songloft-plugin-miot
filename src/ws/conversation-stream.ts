@@ -13,6 +13,7 @@
 import { parseQuery } from '@songloft/plugin-sdk';
 import type { WebSocketRequest, InboundWebSocket } from '@songloft/plugin-sdk';
 import type { ConversationMonitor } from '../conversation/monitor';
+import { toConversationViewModel } from '../conversation/viewmodel';
 import type { ConversationMessage } from '../types';
 
 /** 前端约定的对话订阅 WebSocket 子路径（onWebSocket 收到的 req.path） */
@@ -53,7 +54,7 @@ function broadcast(frame: Record<string, any>): void {
 function ensureCallback(): void {
   if (callbackRegistered || !conversationMonitor) return;
   conversationMonitor.registerCallback(CALLBACK_NAME, (msg: ConversationMessage) => {
-    broadcast({ type: 'message', data: msg });
+    broadcast({ type: 'message', data: toConversationViewModel(msg) });
   });
   callbackRegistered = true;
 }
@@ -110,7 +111,7 @@ export async function handleConversationWebSocket(req: WebSocketRequest, socket:
 /** 向单个连接推送快照帧 */
 function sendSnapshot(socket: InboundWebSocket, limit: number): void {
   if (!conversationMonitor || socket.readyState !== socket.OPEN) return;
-  const messages = conversationMonitor.getMessages(limit, 0);
+  const messages = conversationMonitor.getMessages(limit, 0).map(toConversationViewModel);
   socket.send(JSON.stringify({ type: 'snapshot', data: messages, count: messages.length })).catch((e: any) => {
     songloft.log.warn('[ws/conversation] snapshot send failed: ' + String(e));
   });
