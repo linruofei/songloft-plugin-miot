@@ -133,6 +133,7 @@ onUnmounted(() => {
     <div v-if="state.selectedPlaylistId" class="search-bar">
       <SlIcon name="search" :size="20" />
       <SlInput v-model="search" aria-label="搜索歌曲" placeholder="搜索歌曲、艺术家或专辑" @update:model-value="state.songSearch = search" />
+      <SlButton v-if="search" variant="icon" icon="close" title="清除搜索" @click="search = ''; state.songSearch = ''" />
       <SlButton variant="icon" icon="my_location" title="定位当前播放" @click="locateCurrentSong" />
     </div>
 

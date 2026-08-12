@@ -214,6 +214,7 @@ function finishMobileSwipe(event: TouchEvent): void {
 }
 
 async function centerActiveLyric(): Promise<void> {
+  if (navigation.page !== 'player') return;
   await nextTick();
   for (const panel of [desktopLyrics.value, mobileLyrics.value]) {
     if (!panel || panel.clientHeight <= 0) continue;
@@ -350,6 +351,7 @@ watch(activeLyric, centerActiveLyric);
             />
             <SlButton variant="icon" icon="skip_next" player-icon icon-size="38" class="player-control-button" title="下一首" :disabled="state.playerBusy" @click="playerCommand('/player/next')" />
             <SlButton
+              :key="isFavorite ? 'fav-mobile' : 'unfav-mobile'"
               class="player-favorite-button"
               variant="icon"
               player-icon
@@ -363,6 +365,7 @@ watch(activeLyric, centerActiveLyric);
 
           <div class="fullscreen-tools">
             <SlButton
+              :key="isFavorite ? 'fav-desktop' : 'unfav-desktop'"
               class="fullscreen-tool-desktop player-favorite-button"
               variant="icon"
               player-icon

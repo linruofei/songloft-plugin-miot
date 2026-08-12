@@ -55,6 +55,7 @@ onUnmounted(() => {
     :class="{ 'sl-select-wrap-open': opened }"
   >
     <SlButton
+      :key="modelValue"
       class="sl-select-trigger"
       variant="tonal"
       :label="label"

@@ -33,13 +33,13 @@ const playerIconCodePoints: Record<string, number> = {
 };
 
 const playerGlyph = computed(() => {
-  const codePoint = props.playerIcon && !isWebFRuntime
+  const codePoint = props.playerIcon
     ? playerIconCodePoints[props.name]
     : undefined;
   return codePoint === undefined ? props.name : String.fromCodePoint(codePoint);
 });
 const usesPlayerFont = computed(
-  () => props.playerIcon && !isWebFRuntime && playerIconCodePoints[props.name] !== undefined,
+  () => props.playerIcon && playerIconCodePoints[props.name] !== undefined,
 );
 </script>
 

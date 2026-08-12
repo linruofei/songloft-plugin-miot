@@ -21,8 +21,8 @@ const emit = defineEmits<{
   submit: [];
 }>();
 const native = ref<HTMLElement | null>(null);
-const initialValue = props.modelValue;
 bindNativeProps(native, () => ({
+  val: props.modelValue,
   disabled: !!props.disabled,
   clearable: !!props.clearable,
 }));
@@ -38,7 +38,6 @@ function onNativeInput(event: Event) {
     :key="inputKey"
     ref="native"
     class="sl-input-native"
-    :val="initialValue"
     :type="type"
     :placeholder="placeholder"
     @input="onNativeInput"
