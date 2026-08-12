@@ -311,18 +311,18 @@ watch(activeLyric, centerActiveLyric);
           />
 
           <div class="fullscreen-controls fullscreen-controls-desktop">
-            <SlButton variant="icon" icon="skip_previous" player-icon icon-size="26" class="player-control-button" title="上一首" :disabled="state.playerBusy" @click="playerCommand('/player/previous')" />
+            <SlButton variant="icon" icon="skip_previous" player-icon :icon-size="26" class="player-control-button" title="上一首" :disabled="state.playerBusy" @click="playerCommand('/player/previous')" />
             <SlButton
               class="control-primary"
               variant="filled"
               player-icon
-              icon-size="32"
+              :icon-size="32"
               :icon="state.player.is_playing ? 'pause' : 'play_arrow'"
               :title="state.player.is_playing ? '暂停' : '播放'"
               :disabled="state.playerBusy"
               @click="playerCommand('/player/toggle')"
             />
-            <SlButton variant="icon" icon="skip_next" player-icon icon-size="26" class="player-control-button" title="下一首" :disabled="state.playerBusy" @click="playerCommand('/player/next')" />
+            <SlButton variant="icon" icon="skip_next" player-icon :icon-size="26" class="player-control-button" title="下一首" :disabled="state.playerBusy" @click="playerCommand('/player/next')" />
           </div>
 
           <div class="fullscreen-controls fullscreen-controls-mobile">
@@ -338,18 +338,18 @@ watch(activeLyric, centerActiveLyric);
               :disabled="state.playerBusy"
               @change="setPlaybackSpeed"
             />
-            <SlButton variant="icon" icon="skip_previous" player-icon icon-size="38" class="player-control-button" title="上一首" :disabled="state.playerBusy" @click="playerCommand('/player/previous')" />
+            <SlButton variant="icon" icon="skip_previous" player-icon :icon-size="38" class="player-control-button" title="上一首" :disabled="state.playerBusy" @click="playerCommand('/player/previous')" />
             <SlButton
               class="control-primary"
               variant="filled"
               player-icon
-              icon-size="46"
+              :icon-size="46"
               :icon="state.player.is_playing ? 'pause' : 'play_arrow'"
               :title="state.player.is_playing ? '暂停' : '播放'"
               :disabled="state.playerBusy"
               @click="playerCommand('/player/toggle')"
             />
-            <SlButton variant="icon" icon="skip_next" player-icon icon-size="38" class="player-control-button" title="下一首" :disabled="state.playerBusy" @click="playerCommand('/player/next')" />
+            <SlButton variant="icon" icon="skip_next" player-icon :icon-size="38" class="player-control-button" title="下一首" :disabled="state.playerBusy" @click="playerCommand('/player/next')" />
             <SlButton
               :key="isFavorite ? 'fav-mobile' : 'unfav-mobile'"
               class="player-favorite-button"

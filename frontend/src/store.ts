@@ -79,6 +79,7 @@ export const state = reactive({
   initialized: false,
   loading: true,
   startupError: '',
+  deviceConnecting: false,
   refreshing: false,
   config: { ...defaultConfig } as MiotConfig,
   configLoaded: false,
@@ -650,16 +651,29 @@ export async function initialize(): Promise<void> {
   state.loading = true;
   state.startupError = '';
   try {
-    await Promise.all([loadConfig(), loadAccountsAndDevices(), loadPlaylists(), loadGroups()]);
+    await Promise.all([loadConfig(), loadPlaylists()]);
     savedConfig = configFingerprint();
-    connectStatusStream();
-    await refreshPlayerStatus();
-    await selectCurrentPlaylistOnEntry();
     state.initialized = true;
   } catch (error) {
     state.startupError = messageOf(error);
+    return;
   } finally {
     state.loading = false;
+  }
+  connectDevicesInBackground();
+}
+
+async function connectDevicesInBackground(): Promise<void> {
+  state.deviceConnecting = true;
+  try {
+    await Promise.all([loadAccountsAndDevices(), loadGroups()]);
+    connectStatusStream();
+    await refreshPlayerStatus();
+    await selectCurrentPlaylistOnEntry();
+  } catch (error) {
+    notify(messageOf(error), 'error');
+  } finally {
+    state.deviceConnecting = false;
   }
 }
 

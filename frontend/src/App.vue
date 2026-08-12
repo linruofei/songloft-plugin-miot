@@ -28,7 +28,7 @@ onUnmounted(disposeStore);
   <div class="miot-app">
     <div v-if="state.loading" class="app-state-page">
       <span class="loading-spinner" aria-hidden="true"></span>
-      <p>正在连接智能音箱服务</p>
+      <p>正在加载</p>
     </div>
     <div v-else-if="state.startupError" class="app-state-page">
       <div class="state-icon"><span class="material-symbols-outlined">cloud_off</span></div>
