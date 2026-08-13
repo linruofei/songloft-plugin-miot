@@ -19,6 +19,7 @@ import {
   loadVoiceData,
   messageOf,
   notify,
+  playlistLabel,
   refreshIndex,
   saveConfig,
   saveVoiceCommands,
@@ -86,7 +87,7 @@ const searchPriorityOptions: SelectOption[] = [
 
 const appendPlaylistEnabled = computed(() => !!state.config.external_search_playlist_id);
 const playlistOptions = computed<SelectOption[]>(() =>
-  state.playlists.map((p) => ({ value: String(p.id), label: p.name })),
+  state.playlists.map((p) => ({ value: String(p.id), label: playlistLabel(p) })),
 );
 
 function setAppendPlaylistEnabled(enabled: boolean): void {
@@ -687,12 +688,16 @@ async function deleteMemoryRecord(id?: string): Promise<void> {
       </div>
       <h3 class="card-title section-subtitle">已配置源</h3>
       <div v-for="source in state.config.external_search_sources" :key="source.id" class="sub-panel sub-panel-inset">
-        <div class="field-grid"><SlInput v-model="sourceDrafts[source.id].name" placeholder="显示名称" /><SlInput v-model="sourceDrafts[source.id].url" placeholder="接口地址" /></div>
+        <!-- 各包一层 .field 是为了拿到与其它表单行一致的 16px 行距：.field-grid 的
+             row-gap 是 0，裸 input 会挤在一起。这一行在 APP 里整体不显示的根因是
+             WebF 不绘制 grid 容器，已在 style.css 把 .field-grid 改成 flex
+             （songloft-org/songloft-plugin-miot#79）。 -->
+        <div class="field-grid"><div class="field"><SlInput v-model="sourceDrafts[source.id].name" placeholder="显示名称" /></div><div class="field"><SlInput v-model="sourceDrafts[source.id].url" placeholder="接口地址" /></div></div>
         <SlInput v-model="sourceDrafts[source.id].token" type="password" placeholder="Bearer Token（可选）" />
         <SettingRow title="启用此源"><SlSwitch v-model="sourceDrafts[source.id].enabled" /></SettingRow>
         <div class="field-actions"><SlButton variant="text" label="移除" icon="delete" @click="removeSource(source.id)" /></div>
       </div>
-      <div class="sub-panel sub-panel-inset"><div class="field-grid"><SlInput v-model="newSourceName" placeholder="新源名称" /><SlInput v-model="newSourceUrl" placeholder="接口 URL" /></div><SlInput v-model="newSourceToken" type="password" placeholder="Token（可选）" /><div class="field-actions"><SlButton variant="outlined" label="添加搜索源" icon="add" @click="addSource" /><SlButton variant="filled" label="保存全部" icon="save" @click="saveSources" /></div></div>
+      <div class="sub-panel sub-panel-inset"><div class="field-grid"><div class="field"><SlInput v-model="newSourceName" placeholder="新源名称" /></div><div class="field"><SlInput v-model="newSourceUrl" placeholder="接口 URL" /></div></div><SlInput v-model="newSourceToken" type="password" placeholder="Token（可选）" /><div class="field-actions"><SlButton variant="outlined" label="添加搜索源" icon="add" @click="addSource" /><SlButton variant="filled" label="保存全部" icon="save" @click="saveSources" /></div></div>
       <div class="field"><label class="field-label">接口测试</label><div class="inline-fields"><SlInput v-model="sourceTestQuery" placeholder="输入测试关键字" @submit="testSource" /><SlButton variant="outlined" label="测试" @click="testSource" /></div><pre v-if="sourceTestResult" class="result-pre">{{ sourceTestResult }}</pre></div>
     </div>
   </SectionCard>

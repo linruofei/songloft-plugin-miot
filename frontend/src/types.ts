@@ -271,5 +271,4 @@ export interface LoginChallenge {
 export interface SelectOption {
   value: string;
   label: string;
-  description?: string;
 }

@@ -9,7 +9,7 @@ import SlSelect from '../../ui/SlSelect.vue';
 import SlSlider from '../../ui/SlSlider.vue';
 import SlSwitch from '../../ui/SlSwitch.vue';
 import { navigation } from '../../runtime';
-import { confirmAction, deleteSchedule, loadScheduleLogs, loadSchedules, managedDevices, messageOf, notify, saveConfig, saveSchedule, state, toggleSchedule } from '../../store';
+import { confirmAction, deleteSchedule, loadScheduleLogs, loadSchedules, managedDevices, messageOf, notify, playlistLabel, saveConfig, saveSchedule, state, toggleSchedule } from '../../store';
 import type { ScheduleType, ScheduledTask, SelectOption } from '../../types';
 
 const editor = ref(false);
@@ -41,7 +41,7 @@ const actionOptions: SelectOption[] = [
 const typeOptions: SelectOption[] = [{ value: 'weekly', label: '每周' }, { value: 'monthly', label: '每月' }];
 const modeOptions: SelectOption[] = [{ value: '', label: '跟随上次设置' }, { value: 'order', label: '顺序播放' }, { value: 'loop', label: '列表循环' }, { value: 'single', label: '单曲循环' }, { value: 'random', label: '随机播放' }, { value: 'singlePlay', label: '单曲播放' }];
 const positionOptions: SelectOption[] = [{ value: 'first', label: '从第一首开始' }, { value: 'resume', label: '从上次进度继续' }, { value: 'random', label: '随机位置' }];
-const playlistOptions = computed(() => state.playlists.map((playlist) => ({ value: String(playlist.id), label: playlist.name })));
+const playlistOptions = computed(() => state.playlists.map((playlist) => ({ value: String(playlist.id), label: playlistLabel(playlist) })));
 const songOptions = computed(() => state.songs.map((song) => ({ value: String(song.id), label: `${song.title}${song.artist ? ` · ${song.artist}` : ''}` })));
 
 onMounted(() => { void Promise.all([loadSchedules(), loadScheduleLogs()]); });

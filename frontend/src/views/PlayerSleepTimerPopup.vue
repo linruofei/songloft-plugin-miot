@@ -101,8 +101,9 @@ function submitCustom(): void {
             <button type="button" :disabled="busy" @click="choose('time', 60)">1 小时</button>
             <button type="button" :disabled="busy" @click="showCustom('time')"><SlIcon name="edit" :size="16" player-icon />自定义</button>
           </div>
+          <!-- .grid-cell 让输入框在这个 flex 行里能伸缩（容器已由 grid 改 flex，见 style.css） -->
           <div v-if="customMode === 'time'" class="sleep-timer-custom">
-            <SlInput v-model="customValue" type="number" placeholder="分钟 (1-999)" aria-label="自定义分钟数" @submit="submitCustom" />
+            <div class="grid-cell"><SlInput v-model="customValue" type="number" placeholder="分钟 (1-999)" aria-label="自定义分钟数" @submit="submitCustom" /></div>
             <SlButton variant="filled" label="设定" :disabled="busy" @click="submitCustom" />
           </div>
           <span v-if="customMode === 'time' && customError" class="sleep-timer-error">{{ customError }}</span>
@@ -117,7 +118,7 @@ function submitCustom(): void {
             <button type="button" :disabled="busy" @click="showCustom('songs')"><SlIcon name="edit" :size="16" player-icon />自定义</button>
           </div>
           <div v-if="customMode === 'songs'" class="sleep-timer-custom">
-            <SlInput v-model="customValue" type="number" placeholder="歌曲数 (1-99)" aria-label="自定义歌曲数" @submit="submitCustom" />
+            <div class="grid-cell"><SlInput v-model="customValue" type="number" placeholder="歌曲数 (1-99)" aria-label="自定义歌曲数" @submit="submitCustom" /></div>
             <SlButton variant="filled" label="设定" :disabled="busy" @click="submitCustom" />
           </div>
           <span v-if="customMode === 'songs' && customError" class="sleep-timer-error">{{ customError }}</span>

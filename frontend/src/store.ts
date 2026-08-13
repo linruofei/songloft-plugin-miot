@@ -129,6 +129,12 @@ export function deviceName(device: Device): string {
   return device.name || device.alias || '未命名设备';
 }
 
+// 歌单选项统一显示成「名称 (歌曲数)」。数量直接来自后端 /playlists 的 song_count，
+// 用户靠它比对新导入的歌曲有没有真的入库（songloft-org/songloft-plugin-miot#79）。
+export function playlistLabel(playlist: Playlist): string {
+  return `${playlist.name} (${playlist.song_count ?? 0})`;
+}
+
 export const currentDevice = computed(() => {
   const account = state.devices.find((item) => item.account_id === state.currentAccountId);
   return account?.devices.find((device) => deviceId(device) === state.currentDeviceId) || null;

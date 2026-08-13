@@ -11,13 +11,13 @@ import SlListView from '../ui/SlListView.vue';
 import SlSelect from '../ui/SlSelect.vue';
 import { openSelect } from '../ui/selectState';
 import { navigation, openPage } from '../runtime';
-import { currentDevice, deviceName, messageOf, playSong, refreshAll, selectPlaylist, state, visibleSongs } from '../store';
+import { currentDevice, deviceName, messageOf, playlistLabel, playSong, refreshAll, selectPlaylist, state, visibleSongs } from '../store';
 import type { SelectOption, Song } from '../types';
 
 const search = ref('');
 const songRenderLimit = ref(20);
 const songRenderBatchSize = 40;
-const playlistOptions = computed<SelectOption[]>(() => state.playlists.map((p) => ({ value: String(p.id), label: p.name, description: `${p.song_count ?? 0} 首歌曲` })));
+const playlistOptions = computed<SelectOption[]>(() => state.playlists.map((p) => ({ value: String(p.id), label: playlistLabel(p) })));
 const renderedSongs = computed(() => visibleSongs.value.slice(0, songRenderLimit.value));
 const noServerHint = computed(() => !state.config.server_host || state.config.server_host_status === 'loopback');
 const listMeasureRetries = 6;

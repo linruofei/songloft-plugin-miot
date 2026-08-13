@@ -28,6 +28,7 @@ const slIcon = read('ui/SlIcon.vue');
 const playerBar = read('views/PlayerBar.vue');
 const fullscreenPlayer = read('views/FullscreenPlayer.vue');
 const voiceSettings = read('views/settings/VoiceSettings.vue');
+const scheduleSettings = read('views/settings/ScheduleSettings.vue');
 const modePopup = read('views/PlayerModePopup.vue');
 const speedPopup = read('views/PlayerSpeedPopup.vue');
 const toolboxSettings = read('views/settings/ToolboxSettings.vue');
@@ -67,6 +68,14 @@ assert.match(selectComponent, /sl-select-panel-fixed/);
 assert.match(selectComponent, /sl-select-backdrop/);
 assert.match(selectComponent, /addEventListener\('pointerdown', onPointerDown, true\)/);
 assert.match(selectComponent, /addEventListener\('keydown', onKeydown, true\)/);
+// 面板定位：优先向下 + 高度夹到该侧可用空间 + 下方不够时滚动让位，且滚动产生的
+// scroll 回调必须被 repositioning 吞掉。旧逻辑恒用 320px 算空间，在 APP 的 ~520px
+// 视口里必然翻到上方盖住表单（songloft-org/songloft-plugin-miot#80）。
+assert.match(selectComponent, /function scrollNearestBy/);
+assert.match(selectComponent, /positionPanel\(allowScroll = false\)/);
+assert.match(selectComponent, /nextTick\(\(\) => positionPanel\(true\)\)/);
+assert.match(selectComponent, /opened\.value && !repositioning\) positionPanel\(false\)/);
+assert.match(selectComponent, /maxHeight: `\$\{Math\.round\(height\)\}px`/);
 assert.match(mainPage, /openSelect\.value = null/);
 assert.match(mainPage, /@click="openDevicePicker"/);
 assert.match(style, /\.sl-select-wrap-open\s*\{\s*z-index: 80/);
@@ -270,6 +279,62 @@ assert.match(voiceEngine, /setSleepTimer\(/);
 assert.match(playlistHandler, /status\.state === 'stopped'/);
 assert.match(app, /MIoT/);
 assert.ok(app.length > 50000, '生产 bundle 过小，可能没有包含 Vue 页面');
+
+// WebF 只实现了 calc() / clamp()；CSS min() / max() 会被解析成 unknown 并当成 0，
+// 元素在 APP 里直接消失而浏览器完全正常。整份样式表不允许出现这两个函数。
+// minmax() 是 grid 轨道语法、由 grid.dart 解析，不受影响，要排除掉。
+const cssMathFunctions =
+  style.replace(/\/\*[\s\S]*?\*\//g, '').match(/(?<![-\w])(?<!min)(?:min|max)\(/g) || [];
+assert.deepEqual(cssMathFunctions, [], `style.css 里不允许用 CSS min()/max()：${cssMathFunctions}`);
+assert.match(style, /\.qr-box img[^}]*width: 100%; max-width: 200px/);
+assert.match(style, /\.toast \{[^}]*max-width: 520px/);
+assert.match(style, /\.toast-host[^}]*padding: 0 16px/);
+
+// WebF 会把这两个表单容器「算出布局但不绘制」：探针里 getBoundingClientRect 返回
+// 正常的 309x42，屏幕上和 uiautomator 里却整行都不存在
+//（songloft-org/songloft-plugin-miot#79）。同页的 flex 容器一直正常，故必须用 flex。
+assert.match(style, /\.field-grid \{ display: flex; flex-wrap: wrap; gap: 0 16px; \}/);
+assert.match(style, /\.field-grid > \* \{ flex: 1 1 calc\(50% - 8px\); min-width: 0; \}/);
+assert.match(style, /\.field-grid > \* \{ flex-basis: 100%; \}/);
+assert.match(style, /\.sleep-timer-custom \{ display: flex;/);
+const gridClasses = [...style.matchAll(/^\.([\w-]+)[^{]*\{[^}]*display: grid/gm)].map((m) => m[1]);
+assert.ok(
+  !gridClasses.includes('field-grid') && !gridClasses.includes('sleep-timer-custom'),
+  `表单两列容器不能退回 display:grid：${gridClasses}`,
+);
+// 余下的 grid 容器（纯 button/section 子项）仍受「直接子项不能是 Sl* 控件」约束
+gridClasses.push('field-grid', 'sleep-timer-custom');
+const vueSources = fs
+  .readdirSync(path.join(sourceRoot, 'views'), { recursive: true })
+  .filter((f) => String(f).endsWith('.vue'))
+  .map((f) => [String(f), read(path.join('views', String(f)))]);
+for (const [name, source] of vueSources) {
+  for (const gridClass of gridClasses) {
+    const offenders = source.match(
+      new RegExp(`class="[^"]*\\b${gridClass}\\b[^"]*"[^>]*>\\s*<Sl[A-Za-z]+`, 'g'),
+    );
+    assert.equal(
+      offenders,
+      null,
+      `views/${name}：.${gridClass} 的直接子项不能是原生控件，要包一层 div：${offenders}`,
+    );
+  }
+}
+assert.match(voiceSettings, /field-grid"><div class="field"><SlInput v-model="sourceDrafts\[source\.id\]\.name"/);
+assert.match(voiceSettings, /field-grid"><div class="field"><SlInput v-model="newSourceName"/);
+assert.match(style, /\.grid-cell \{ min-width: 0; \}/);
+assert.match(sleepTimerPopup, /sleep-timer-custom">\s*<div class="grid-cell"><SlInput/);
+
+// 歌单下拉统一显示歌曲数（songloft-org/songloft-plugin-miot#79 评论）
+assert.match(store, /export function playlistLabel/);
+assert.match(store, /\$\{playlist\.name\} \(\$\{playlist\.song_count \?\? 0\}\)/);
+for (const [name, source] of [
+  ['MainPage', mainPage],
+  ['ScheduleSettings', scheduleSettings],
+  ['VoiceSettings', voiceSettings],
+]) {
+  assert.match(source, /playlistLabel\(/, `${name} 的 playlistOptions 应使用 playlistLabel`);
+}
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 assert.equal(clamp(120, 0, 100), 100);

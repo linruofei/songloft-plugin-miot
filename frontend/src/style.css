@@ -1,3 +1,8 @@
+/* 禁止使用 CSS min() / max()：WebF 只实现了 calc() 与 clamp()（css/values/calc.dart），
+   min()/max() 会被解析成 CSSLengthValue.unknown，而 unknown 的 isAuto 是 false、
+   computedValue 是 0 —— 于是 `width: min(200px,100%)` 等价于 `width: 0`，不是回退 auto，
+   替换元素的固有尺寸兜底也走不到。表现是元素在 APP 里直接消失，浏览器里却完全正常。
+   一律改写成 width + max-width 这类对偶属性。参考 songloft-org/songloft-plugin-miot#80。 */
 :root {
   --miot-content-width: 1200px;
   --miot-detail-width: 800px;
@@ -263,7 +268,10 @@ html.webf-engine .settings-nav { height: calc(100vh - 56px); }
 .sleep-timer-options > button:hover { background: var(--md-surface-container-highest); }
 .sleep-timer-options > button.selected { border-color: var(--md-primary); background: var(--md-secondary-container); color: var(--md-on-secondary-container); }
 .sleep-timer-options > button:disabled, .sleep-timer-status > button:disabled { opacity: .45; }
-.sleep-timer-custom { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; margin-top: 10px; }
+/* 与 .field-grid 同构（都是「minmax(0,1fr) + 表单控件」），预防性改 flex。
+   这一处没有单独在设备上复现过 —— 睡眠定时弹层要求已选中真实音箱，测试环境进不去。 */
+.sleep-timer-custom { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.sleep-timer-custom > .grid-cell { flex: 1 1 auto; }
 .sleep-timer-custom .sl-input, .sleep-timer-custom .sl-input-native { width: 100%; min-width: 0; }
 .sleep-timer-custom .sl-button { min-height: 40px; }
 .sleep-timer-error { display: block; margin-top: 6px; color: var(--md-error); font-size: 12px; }
@@ -322,7 +330,19 @@ html.webf-engine .settings-nav { height: calc(100vh - 56px); }
 .field-label { display: block; margin-bottom: 6px; color: var(--md-on-surface-variant); font-size: 12px; font-weight: 500; }
 .field-help { margin-top: 6px; color: var(--md-on-surface-variant); font-size: 12px; overflow-wrap: anywhere; }
 .field-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 16px; }
-.field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 16px; }
+/* 用 flex 而不是 grid：这个容器在 APP（WebF）里会「算出布局但不绘制」——页内探针
+   getBoundingClientRect 返回正常的 309x42，屏幕上整行却不存在，uiautomator 里也没有
+   对应节点（songloft-org/songloft-plugin-miot#79）。注意本文件其余 grid 容器
+   （.day-grid / .player-full-progress / .fullscreen-desktop-stage）是正常绘制的，
+   精确触发条件没定死，但同页的 flex 容器（.inline-fields / .field-actions）从来没出过
+   这个问题，所以两列表单行统一走 flex，不要退回 grid。
+   与 grid 的唯一行为差异：只剩一个子项时（另一个被 v-if 去掉）会 grow 到整行宽，
+   grid 时代是留半列空白。 */
+.field-grid { display: flex; flex-wrap: wrap; gap: 0 16px; }
+.field-grid > * { flex: 1 1 calc(50% - 8px); min-width: 0; }
+/* flex 单元格的中性包装层：只负责允许收缩，不带 .field 的 16px 下边距
+   （那会把「输入框 + 按钮」这种紧凑单行撑开）。 */
+.grid-cell { min-width: 0; }
 .inline-fields { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
 .inline-fields > .sl-input,
 .inline-fields > .sl-input-native,
@@ -344,7 +364,7 @@ html.webf-engine .settings-nav { height: calc(100vh - 56px); }
 .chip-error { background: var(--md-error-container); color: var(--md-on-error-container); }
 .empty-state { padding: 24px 8px; color: var(--md-on-surface-variant); text-align: center; }
 .qr-box { margin-top: 16px; text-align: center; }
-.qr-box img { width: min(200px, 100%); aspect-ratio: 1; object-fit: contain; border: 1px solid var(--md-outline-variant); border-radius: var(--md-radius-md); background: #fff; }
+.qr-box img { width: 100%; max-width: 200px; aspect-ratio: 1; object-fit: contain; border: 1px solid var(--md-outline-variant); border-radius: var(--md-radius-md); background: #fff; }
 .qr-box p { margin-top: 8px; color: var(--md-on-surface-variant); }
 .result-pre { max-height: 220px; overflow: auto; margin: 12px 0 0; padding: 12px; border-radius: var(--md-radius-sm); background: var(--md-surface-container-high); color: var(--md-on-surface-variant); font: 12px/1.5 ui-monospace, monospace; white-space: pre-wrap; word-break: break-word; }
 .error-text { color: var(--md-error); font-size: 12px; }
@@ -416,8 +436,8 @@ html.webf-engine .settings-nav { height: calc(100vh - 56px); }
 .device-picker-copy { min-width: 0; flex: 1; }
 .device-picker-copy strong, .device-picker-copy small { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .device-picker-copy small { color: var(--md-on-surface-variant); font-size: 12px; }
-.toast-host { position: fixed; z-index: 400; left: 0; right: 0; bottom: calc(16px + var(--sl-safe-bottom, 0px)); display: flex; justify-content: center; pointer-events: none; }
-.toast { max-width: min(520px, calc(100vw - 32px)); padding: 12px 16px; border-radius: var(--md-radius-sm); background: var(--md-inverse-surface); color: var(--md-on-inverse-surface); box-shadow: var(--md-shadow-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.toast-host { position: fixed; z-index: 400; left: 0; right: 0; bottom: calc(16px + var(--sl-safe-bottom, 0px)); display: flex; justify-content: center; padding: 0 16px; pointer-events: none; }
+.toast { max-width: 520px; padding: 12px 16px; border-radius: var(--md-radius-sm); background: var(--md-inverse-surface); color: var(--md-on-inverse-surface); box-shadow: var(--md-shadow-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .toast-success { background: var(--md-success); color: #fff; }
 .toast-warning { background: var(--md-warning); color: #fff; }
 .toast-error { background: var(--md-error); color: var(--md-on-error); }
@@ -446,12 +466,12 @@ html.webf-engine .settings-nav { height: calc(100vh - 56px); }
 .lyrics-empty { min-height: 100%; display: flex; align-items: center; justify-content: center; color: var(--md-on-surface-variant); text-align: center; }
 .lyric-line { min-height: 48px; display: flex; align-items: center; justify-content: center; color: var(--md-on-surface-variant); font-size: 16px; line-height: 24px; text-align: center; transition: color .2s, font-size .2s; }
 .lyric-line.active { color: var(--md-on-surface); font-size: 19px; font-weight: 600; }
-.fullscreen-playback { width: min(100%, 760px); flex: 0 0 auto; margin: 0 auto; padding: 12px 0 8px; }
+.fullscreen-playback { width: 100%; max-width: 760px; flex: 0 0 auto; margin: 0 auto; padding: 12px 0 8px; }
 .fullscreen-controls { display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 10px; }
 .fullscreen-controls > .player-popup-anchor, .fullscreen-controls > .sl-button-icon { width: 48px; height: 48px; }
 .fullscreen-controls-mobile { display: none; }
 .fullscreen-controls-desktop .control-primary.sl-button { width: 52px; height: 52px; border-radius: 50%; box-shadow: var(--md-shadow-2); }
-.fullscreen-tools { width: min(100%, 420px); min-height: 48px; display: flex; align-items: center; justify-content: space-around; margin: 8px auto 0; }
+.fullscreen-tools { width: 100%; max-width: 420px; min-height: 48px; display: flex; align-items: center; justify-content: space-around; margin: 8px auto 0; }
 .fullscreen-tools > .player-popup-anchor, .fullscreen-tools > .sl-button-icon { width: 48px; height: 48px; }
 
 @media (max-width: 760px) {
@@ -475,7 +495,7 @@ html.webf-engine .settings-nav { height: calc(100vh - 56px); }
   .bar-play-primary.sl-button-icon { width: 44px; height: 44px; min-height: 44px; background: transparent; color: var(--md-primary); box-shadow: none; }
   .player-bar-time { display: none; }
   .player-bar-tools { display: none; }
-  .field-grid { grid-template-columns: 1fr; }
+  .field-grid > * { flex-basis: 100%; }
   .setting-row { padding-left: 16px; padding-right: 16px; }
   .form-body { padding-left: 16px; padding-right: 16px; }
   .section-description { padding-left: 16px; padding-right: 16px; }
