@@ -1047,7 +1047,7 @@ export class VoiceEngine {
       return;
     }
 
-    // 播放失败且因歌单 ID ���失效：刷新索引后按名字重新查找并重试一次
+    // 播放失败且因歌单 ID 已失效：刷新索引后按名字重新查找并重试一次
     if (pm.isLastPlayNotFound()) {
       songloft.log.warn(`[VoiceEngine] Stale playlist ID ${matchedPlaylist.id} in playPlaylist, refreshing index and retrying`);
       await this.indexingManager.refresh();
@@ -1105,7 +1105,7 @@ export class VoiceEngine {
     const hint = this.buildExternalSearchHint(songName, artist);
     const priority = this.normalizeSearchPriority(config.search_priority);
     // warn 级：这是搜歌链路的入口锚点。插件日志默认都是 info，而宿主 log level 常被设为
-    // error/warn，导出的日志���一条插件记录都没有，问题完全不可定位
+    // error/warn，导出的日志连一条插件记录都没有，问题完全不可定位
     // （songloft-org/songloft-plugin-miot#62 的排查就卡在这）。
     songloft.log.warn(`[VoiceEngine] Play song priority=${priority} keyword="${songName}" localTerm="${searchTerm}"`);
 
@@ -2073,7 +2073,7 @@ export class VoiceEngine {
     if (mode === 'songs') {
       const count = parseSongsCount(query);
       if (count <= 0) {
-        songloft.log.warn(`[VoiceEngine] [SleepTimer] ���法解析曲目数 query="${query}"`);
+        songloft.log.warn(`[VoiceEngine] [SleepTimer] 无法解析曲目数 query="${query}"`);
         await this.minaService.textToSpeech(accountId, deviceId, '抱歉，无法识别曲目数');
         return;
       }

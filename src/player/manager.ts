@@ -1100,7 +1100,7 @@ export class PlaylistManager {
         return (this.currentIndex + 1) % len;
 
       case 'single':
-        // 单曲循环：一直播放当��歌曲
+        // 单曲循环：一直播放当前歌曲
         return this.currentIndex;
 
       case 'singlePlay':
