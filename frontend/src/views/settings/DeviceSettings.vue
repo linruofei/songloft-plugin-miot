@@ -63,12 +63,28 @@ async function saveServerHost() {
   state.config.server_host_status = host.includes('localhost') || host.includes('127.0.0.1') ? 'loopback' : 'ok';
 }
 async function autoFill() {
+  const origin = window.location.origin || `${window.location.protocol}//${window.location.host}`;
+  console.log('[autoFill] browser origin:', origin);
+  if (!origin || origin === 'null') {
+    console.warn('[autoFill] cannot detect browser origin');
+    notify('未检测到浏览器地址', 'warning');
+    return;
+  }
+  // 如果 origin 不在下拉列表的可选项中，切到自定义地址
   const suggested = Array.isArray(state.config.suggested_addresses) ? state.config.suggested_addresses : [];
-  if (suggested[0]) {
-    serverChoice.value = suggested[0];
-    customHost.value = serverChoice.value;
-    notify('已填入检测到的局域网地址', 'info');
-  } else notify('未检测到可用局域网地址', 'warning');
+  console.log('[autoFill] suggested addresses:', suggested);
+  if (suggested.includes(origin)) {
+    serverChoice.value = origin;
+  } else {
+    serverChoice.value = '__custom__';
+  }
+  customHost.value = origin;
+  const isLoopback = origin.includes('localhost') || origin.includes('127.0.0.1') || origin.includes('::1') || origin.includes('[::1]');
+  if (isLoopback) {
+    notify('已填入浏览器地址，但 localhost/127.0.0.1 仅限本机调试，音箱无法访问', 'warning');
+  } else {
+    notify('已填入浏览器地址', 'info');
+  }
 }
 async function submitPassword() {
   if (!username.value.trim() || !password.value) { notify('请填写用户名和密码', 'warning'); return; }
