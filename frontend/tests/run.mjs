@@ -91,7 +91,7 @@ assert.match(style, /\.sl-select-wrap-open\s*\{\s*z-index: 80/);
 assert.match(style, /\.miot-main-appbar[\s\S]*position: fixed/);
 assert.match(style, /html\.webf-engine \.miot-app \* \{ transform-origin: 0 0; \}/);
 assert.match(style, /html\.webf-engine \.player-volume-slider[^}]*transform: none/);
-assert.match(style, /\.settings-scroll-body[^}]*height: calc\(100dvh - 56px\)[^}]*overflow-y: auto/);
+assert.match(style, /\.settings-scroll-body[^}]*height: calc\(100dvh - 56px\)[^}]*overflow: hidden/);
 assert.match(style, /\.switch-track::after[^}]*transition: transform/);
 assert.match(style, /\.switch input:checked ~ \.switch-track::after[^}]*translateX\(20px\)/);
 assert.match(settingsPage, /class="settings-scroll-body"/);

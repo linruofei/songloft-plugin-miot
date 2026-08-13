@@ -23,9 +23,13 @@ const currentCategory = computed(() => categories.find((category) => category.id
 const showMobileMenu = computed(() => isNarrow.value && !navigation.settingsCategory);
 const appbarTitle = computed(() => isNarrow.value && navigation.settingsCategory ? currentCategory.value.title : '设置');
 const settingsBody = ref<HTMLElement | null>(null);
+const settingsContent = ref<HTMLElement | null>(null);
+const mobileMenu = ref<HTMLElement | null>(null);
 function resetSettingsViewport(): void {
   openSelect.value = null;
   navigation.editorOpen = false;
+  settingsContent.value?.scrollTo?.(0, 0);
+  mobileMenu.value?.scrollTo?.(0, 0);
   settingsBody.value?.scrollTo?.(0, 0);
   if (settingsBody.value) settingsBody.value.scrollTop = 0;
 }
@@ -54,14 +58,14 @@ onUnmounted(() => window.removeEventListener('resize', updateWidth));
     </div>
     <div ref="settingsBody" class="settings-scroll-body">
     <div class="settings-shell">
-      <div v-if="showMobileMenu" class="settings-mobile-menu">
+      <div v-if="showMobileMenu" ref="mobileMenu" class="settings-mobile-menu">
         <button v-for="category in categories" :key="category.id" class="settings-nav-item" @click="setCategory(category.id)"><span class="settings-nav-icon"><SlIcon :name="category.icon" :size="20" /></span><span class="settings-nav-copy"><strong class="settings-nav-title">{{ category.title }}</strong><small class="settings-nav-subtitle">{{ category.subtitle }}</small></span><SlIcon name="chevron_right" :size="20" /></button>
       </div>
       <div v-else class="settings-layout">
         <nav class="settings-nav" aria-label="设置分类">
           <button v-for="category in categories" :key="category.id" class="settings-nav-item" :class="{ active: category.id === currentCategory.id }" @click="setCategory(category.id)"><span class="settings-nav-icon"><SlIcon :name="category.icon" :size="20" /></span><span class="settings-nav-copy"><strong class="settings-nav-title">{{ category.title }}</strong><small class="settings-nav-subtitle">{{ category.subtitle }}</small></span></button>
         </nav>
-        <section class="settings-content">
+        <section ref="settingsContent" class="settings-content">
           <div class="settings-header"><h1>{{ currentCategory.title }}</h1></div>
           <component :is="currentCategory.component" />
         </section>

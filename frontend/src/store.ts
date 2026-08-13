@@ -344,18 +344,28 @@ export async function selectPlaylist(playlistId: string): Promise<void> {
 }
 
 async function selectCurrentPlaylistOnEntry(): Promise<void> {
-  if (state.selectedPlaylistId || !state.player.current_song) return;
+  if (state.selectedPlaylistId) return;
 
-  const statusPlaylistId = state.player.playlist_id;
-  const matchedById = statusPlaylistId === undefined
-    ? undefined
-    : state.playlists.find((playlist) => String(playlist.id) === String(statusPlaylistId));
-  const matched = matchedById || (
-    state.player.playlist_name
-      ? state.playlists.find((playlist) => playlist.name === state.player.playlist_name)
-      : undefined
-  );
-  if (matched) await selectPlaylist(String(matched.id));
+  if (state.player.current_song) {
+    const statusPlaylistId = state.player.playlist_id;
+    const matchedById = statusPlaylistId === undefined
+      ? undefined
+      : state.playlists.find((playlist) => String(playlist.id) === String(statusPlaylistId));
+    const matched = matchedById || (
+      state.player.playlist_name
+        ? state.playlists.find((playlist) => playlist.name === state.player.playlist_name)
+        : undefined
+    );
+    if (matched) {
+      await selectPlaylist(String(matched.id));
+      return;
+    }
+  }
+
+  // 有歌单但没有匹配到当前播放时，默认选第一个歌单
+  if (state.playlists.length > 0) {
+    await selectPlaylist(String(state.playlists[0].id));
+  }
 }
 
 function targetBody() {
