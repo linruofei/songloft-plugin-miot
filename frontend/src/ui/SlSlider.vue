@@ -36,7 +36,7 @@ const useTouchFallback = computed(() => isWebFRuntime && !useNativeSlider);
 
 function valueFrom(event: Event): number {
   const detail = (event as CustomEvent).detail;
-  return Number(detail ?? (event.target as HTMLInputElement).value);
+  return Number((event as InputEvent).data ?? detail ?? (event.target as HTMLInputElement).value);
 }
 
 function positionFromEvent(clientX: number, clientY: number): number {

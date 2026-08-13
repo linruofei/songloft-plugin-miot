@@ -266,6 +266,10 @@ assert.doesNotMatch(sliderComponent, /bindNativeProps/);
 // 恒为 0/100，拖动进度条 seek 到的位置是错的。
 assert.match(progress, /bindNativeAttrs\(nativeSlider/);
 assert.doesNotMatch(progress, /bindNativeProps/);
+// 原生滑块的 input 事件把新值放在 InputEvent.data 里（不是 CustomEvent.detail），
+// valueFrom 必须优先读 event.data，否则 UIEvent.detail（恒为 0）会被 ?? 当作有效值。
+assert.match(sliderComponent, /\(event as InputEvent\)\.data/);
+assert.match(progress, /\(event as InputEvent\)\.data/);
 assert.match(style, /html\.webf-engine \.player-volume-slider \.sl-slider-native[^}]*width: 28px[^}]*height: 112px/);
 assert.match(viteConfig, /assetsInlineLimit: 16 \* 1024/);
 assert.match(volumePopup, /function clampVolume\(value: number\)/);

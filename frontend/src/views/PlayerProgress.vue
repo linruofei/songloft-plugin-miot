@@ -48,14 +48,14 @@ bindNativeAttrs(nativeSlider, () => ({
 
 function nativeInput(event: Event): void {
   const detail = (event as CustomEvent).detail;
-  const val = Number(detail ?? (event.target as HTMLInputElement).value);
+  const val = Number((event as InputEvent).data ?? detail ?? (event.target as HTMLInputElement).value);
   dragging.value = true;
   dragPosition.value = val;
 }
 
 function nativeChange(event: Event): void {
   const detail = (event as CustomEvent).detail;
-  const val = Number(detail ?? (event.target as HTMLInputElement).value);
+  const val = Number((event as InputEvent).data ?? detail ?? (event.target as HTMLInputElement).value);
   if (!dragging.value) dragging.value = true;
   dragPosition.value = val;
   dragging.value = false;
