@@ -38,9 +38,11 @@ onUnmounted(disposeStore);
     </div>
     <template v-else>
       <SettingsPage v-if="navigation.page === 'settings'" />
-      <KeepAlive>
-        <FullscreenPlayer v-if="navigation.page === 'player'" />
-      </KeepAlive>
+      <!-- 刻意不套 KeepAlive：WebF 重新挂载缓存子树时不会重排，第二次打开播放器
+           整个 fullscreen-playback（歌名/进度/控制/工具）会零尺寸不可见
+           （songloft-org/songloft-plugin-miot#81）。重建成本很低——onMounted 会
+           重新拉歌词与延迟停止状态，而歌词本来就随 current_song 变化重拉。 -->
+      <FullscreenPlayer v-if="navigation.page === 'player'" />
       <MainPage v-if="navigation.page !== 'settings' && navigation.page !== 'player'" />
     </template>
     <Snackbar />

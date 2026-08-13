@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue';
 import { useNativeSlider, isWebFRuntime } from '../runtime';
-import { bindNativeProps } from '../ui/nativeProps';
+import { bindNativeAttrs } from '../ui/nativeProps';
 
 const props = withDefaults(
   defineProps<{ position: number; duration: number; mini?: boolean; disabled?: boolean }>(),
@@ -33,7 +33,11 @@ function time(seconds: number): string {
 }
 
 // --- Native slider (songloft-slider) for WebF ---
-bindNativeProps(nativeSlider, () => ({
+// 必须走 attribute：`songloft_slider.dart` 只读 getAttribute（见 ui/nativeProps.ts）。
+// 用 property 的话 min/max 恒为默认的 0/100，拖动进度条会把一首 3 分半的歌
+// 映射成 0~100 秒的量程 —— 视觉上看不出来（轨道与滑块是另外的 div，原生元素
+// opacity 0 只当手势层），但 seek 到的位置是错的。
+bindNativeAttrs(nativeSlider, () => ({
   value: displayPosition.value,
   min: 0,
   max: safeMax.value,

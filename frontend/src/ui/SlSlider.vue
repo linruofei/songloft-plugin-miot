@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, useAttrs } from 'vue';
 import { isWebFRuntime, useNativeSlider } from '../runtime';
-import { bindNativeProps } from './nativeProps';
+import { bindNativeAttrs } from './nativeProps';
 
 defineOptions({ inheritAttrs: false });
 
@@ -21,7 +21,9 @@ const emit = defineEmits<{ 'update:modelValue': [number]; change: [number] }>();
 const attrs = useAttrs();
 const native = ref<HTMLElement | null>(null);
 const track = ref<HTMLElement | null>(null);
-bindNativeProps(native, () => ({
+// 必须走 attribute（不是 property）：`songloft_slider.dart` 只读 getAttribute。
+// 详见 nativeProps.ts 的 bindNativeAttrs 注释。
+bindNativeAttrs(native, () => ({
   value: props.modelValue,
   min: props.min,
   max: props.max,

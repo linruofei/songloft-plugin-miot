@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
+import { iconFontEpoch, iconFontReady } from './iconFont';
 
 const props = defineProps<{ name: string; size?: number; playerIcon?: boolean }>();
 
@@ -117,13 +118,25 @@ const glyph = computed(() =>
   codePoint.value === undefined ? props.name : String.fromCodePoint(codePoint.value),
 );
 const fontClass = computed(() => (props.playerIcon ? 'sl-icon-material-player' : 'sl-icon-ui'));
+
+// 字体未就绪时用 visibility 藏起来而不是清空文本：盒子照常占位，切换时不跳版，
+// 也不会先闪一帧 fallback 字形（方块 / emoji）。就绪判定见 `iconFont.ts`。
+const style = computed(() => {
+  const value: Record<string, string> = {};
+  if (props.size) value.fontSize = `${props.size}px`;
+  if (!iconFontReady.value) value.visibility = 'hidden';
+  return value;
+});
 </script>
 
 <template>
+  <!-- `:key` 绑 iconFontEpoch：字体到货后整个元素重建，新文本节点才会重新排版
+       拿到真字形。WebF 只重排「第一个请求者」，别的图标不重建就永久停在 fallback。 -->
   <span
+    :key="iconFontEpoch"
     class="material-symbols-outlined sl-icon"
     :class="fontClass"
     aria-hidden="true"
-    :style="size ? { fontSize: `${size}px` } : undefined"
+    :style="style"
   >{{ glyph }}</span>
 </template>

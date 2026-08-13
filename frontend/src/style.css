@@ -242,6 +242,10 @@ html.webf-engine .miot-app * { transform-origin: 0 0; }
 .player-sleep-popup { width: 280px; max-width: calc(100vw - 32px); max-height: calc(100vh - 96px); overflow-y: auto; transform: translateX(-50%); }
 html.webf-engine .player-volume-popup { left: calc(50% - 32px); transform: none; }
 html.webf-engine .player-volume-slider { width: 28px; height: 112px; transform: none; }
+/* 原生滑块自己读 renderStyle.width/height 决定画布尺寸，`.sl-slider-native` 上的
+   百分比在它那儿解析不出来就会落回默认 160×28（横条），把 64px 宽的弹出层撑破。
+   这里给显式 px 兜住。 */
+html.webf-engine .player-volume-slider .sl-slider-native { width: 28px; height: 112px; }
 html.webf-engine .player-sleep-popup { left: calc(50% - 140px); transform: none; }
 html.webf-engine .fullscreen-player { height: 100vh; background: var(--md-surface, #FEF7FF); }
 html.webf-engine .fullscreen-playback { background: var(--md-surface, #FEF7FF); }

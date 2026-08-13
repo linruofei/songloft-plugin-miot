@@ -17,6 +17,10 @@ const appBar = read('views/AppBar.vue');
 const publicIcon = fs.readFileSync(path.join(frontendRoot, 'public/icon.svg'), 'utf8');
 const switchComponent = read('ui/SlSwitch.vue');
 const sliderComponent = read('ui/SlSlider.vue');
+const iconFont = read('ui/iconFont.ts');
+const nativeProps = read('ui/nativeProps.ts');
+const mainEntry = read('main.ts');
+const viteConfig = fs.readFileSync(path.join(frontendRoot, 'vite.config.ts'), 'utf8');
 const selectComponent = read('ui/SlSelect.vue');
 const slListView = read('ui/SlListView.vue');
 const slButton = read('ui/SlButton.vue');
@@ -86,7 +90,10 @@ assert.match(runtime, /devicePickerOpen/);
 assert.match(runtime, /if \(state\.confirm\.open\) \{[\s\S]*resolveConfirm\(false\)/);
 assert.match(runtime, /navigation\.devicePickerOpen = false/);
 assert.match(rootApp, /v-if="navigation\.page === 'settings'"/);
-assert.match(rootApp, /<KeepAlive>\s*<FullscreenPlayer v-if="navigation\.page === 'player'"/);
+// 刻意不套 KeepAlive：WebF 重新挂载缓存子树时不重排，第二次打开播放器整块不可见
+// （songloft-org/songloft-plugin-miot#81）。
+assert.match(rootApp, /<FullscreenPlayer v-if="navigation\.page === 'player'" \/>/);
+assert.doesNotMatch(rootApp, /<KeepAlive>/);
 assert.doesNotMatch(rootApp, /FullscreenPlayer v-show/);
 assert.doesNotMatch(rootApp, /settingsOpen|playerOpen/);
 assert.doesNotMatch(style, /\.page-overlay/);
@@ -135,9 +142,15 @@ assert.match(voiceSettings, /commandInputVersions/);
 assert.match(style, /\.inline-fields\s*\{[^}]*flex-wrap: wrap/);
 assert.match(style, /\.card\.miot-card\s*\{[^}]*padding: 0/);
 assert.match(style, /\.player-mini-progress[\s\S]*height: 2px/);
-assert.match(playerBar, /<PlayerProgress[\s\S]*mini/);
+// 1a7a63a 起播放条不再复用 <PlayerProgress mini>，改成自带的 player-bar-progress，
+// 这条断言当时漏改、一直是红的。
+assert.match(playerBar, /class="player-bar-progress"[\s\S]*player-bar-progress-fill/);
 assert.match(playerBar, /@click="openPlayer"/);
-assert.doesNotMatch(playerBar, /setVolume|open_in_full/);
+// 1a7a63a 起宽屏播放条带上了「播放模式 / 音量 / 延迟停止 / 停止」工具区，窄屏由
+// media query 隐藏。原来那两条 doesNotMatch 已与设计相反、一直是红的，改成正向断言。
+assert.match(playerBar, /class="player-bar-tools"/);
+assert.match(playerBar, /@change="setVolume"/);
+assert.match(style, /@media \(max-width: 760px\)[\s\S]*\.player-bar-tools \{ display: none; \}/);
 assert.doesNotMatch(playerBar, /mini-mode-control|mini-stop-control/);
 assert.match(modePopup, /value: 'single'/);
 assert.match(modePopup, /value: 'random'/);
@@ -216,6 +229,27 @@ assert.match(modePopup, /player-mode-popup/);
 assert.match(volumePopup, /player-volume-popup/);
 assert.match(volumePopup, /orientation="vertical"/);
 assert.match(sliderComponent, /orientation: props\.orientation/);
+
+// WebF 字体迟到竞态（songloft-org/songloft-plugin-miot#81）：
+// 图标必须能在字体到货后重建，原生滑块必须走 attribute 而不是 property。
+assert.match(iconFont, /export const iconFontReady/);
+assert.match(iconFont, /export const iconFontEpoch/);
+assert.match(iconFont, /getBoundingClientRect\(\)\.width/);
+assert.match(iconFont, /String\.fromCodePoint\(0xe88e\)/);
+assert.match(iconFont, /String\.fromCodePoint\(0xe25b\)/);
+assert.match(slIcon, /:key="iconFontEpoch"/);
+assert.match(slIcon, /iconFontReady\.value/);
+assert.match(mainEntry, /installIconFontWatch\(\);\s*\n\s*\ncreateApp\(App\)/);
+assert.match(nativeProps, /export function bindNativeAttrs/);
+assert.match(nativeProps, /removeAttribute\(key\)/);
+assert.match(sliderComponent, /bindNativeAttrs\(native/);
+assert.doesNotMatch(sliderComponent, /bindNativeProps/);
+// PlayerProgress 也驱动 <songloft-slider>，同样只能走 attribute，否则 min/max
+// 恒为 0/100，拖动进度条 seek 到的位置是错的。
+assert.match(progress, /bindNativeAttrs\(nativeSlider/);
+assert.doesNotMatch(progress, /bindNativeProps/);
+assert.match(style, /html\.webf-engine \.player-volume-slider \.sl-slider-native[^}]*width: 28px[^}]*height: 112px/);
+assert.match(viteConfig, /assetsInlineLimit: 16 \* 1024/);
 assert.match(volumePopup, /function clampVolume\(value: number\)/);
 assert.match(volumePopup, /ref\(clampVolume\(props\.modelValue\)\)/);
 assert.match(progress, /player-seek-input/);
