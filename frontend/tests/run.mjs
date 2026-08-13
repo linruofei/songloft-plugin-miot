@@ -74,8 +74,17 @@ assert.match(selectComponent, /addEventListener\('keydown', onKeydown, true\)/);
 assert.match(selectComponent, /function scrollNearestBy/);
 assert.match(selectComponent, /positionPanel\(allowScroll = false\)/);
 assert.match(selectComponent, /nextTick\(\(\) => positionPanel\(true\)\)/);
-assert.match(selectComponent, /opened\.value && !repositioning\) positionPanel\(false\)/);
-assert.match(selectComponent, /maxHeight: `\$\{Math\.round\(height\)\}px`/);
+assert.match(selectComponent, /if \(!opened\.value \|\| repositioning\) return;/);
+// fixed 的面板本体不能自己滚动：WebF 会把它自己的 scrollTop 计入 fixed 的绘制补偿
+// （box_model.dart:1807），一滚面板就整体下移（songloft-org/songloft#397）。
+// 滚动必须落在内层，且 window 上的 capture scroll 监听要忽略面板内部的滚动。
+assert.doesNotMatch(style, /\.sl-select-panel \{[^}]*overflow(-y)?: (auto|scroll)/);
+assert.match(style, /\.sl-select-panel \{[^}]*overflow: hidden/);
+assert.match(style, /\.sl-select-panel-scroll \{[^}]*overflow-y: auto/);
+assert.match(selectComponent, /class="sl-select-panel-scroll"/);
+assert.match(selectComponent, /scrollStyle\.value = \{ maxHeight: `\$\{Math\.round\(height\) - 2\}px` \}/);
+assert.doesNotMatch(selectComponent, /maxHeight: `\$\{Math\.round\(height\)\}px`/);
+assert.match(selectComponent, /if \(target && panel\.value\?\.contains\(target\)\) return;/);
 assert.match(mainPage, /openSelect\.value = null/);
 assert.match(mainPage, /@click="openDevicePicker"/);
 assert.match(style, /\.sl-select-wrap-open\s*\{\s*z-index: 80/);

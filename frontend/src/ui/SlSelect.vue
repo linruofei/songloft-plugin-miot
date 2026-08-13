@@ -20,6 +20,7 @@ const emit = defineEmits<{ 'update:modelValue': [string] }>();
 const wrapper = ref<HTMLElement | null>(null);
 const panel = ref<HTMLElement | null>(null);
 const panelStyle = ref<Record<string, string>>({});
+const scrollStyle = ref<Record<string, string>>({});
 const id = nextSelectId();
 // positionPanel 内部滚动让位时置位，用来吞掉由此产生的 scroll 回调，避免自激
 let repositioning = false;
@@ -101,8 +102,10 @@ function positionPanel(allowScroll = false): void {
     left: `${Math.round(left)}px`,
     top: `${Math.round(top)}px`,
     width: `${Math.round(rect.width)}px`,
-    maxHeight: `${Math.round(height)}px`,
   };
+  // 高度给内层滚动容器，不能给 fixed 的外层（见 style.css .sl-select-panel 注释）。
+  // 减 2 是外层的上下边框，让整体不超出算出来的可用空间。
+  scrollStyle.value = { maxHeight: `${Math.round(height) - 2}px` };
 }
 
 function toggle() {
@@ -130,7 +133,17 @@ function onKeydown(event: KeyboardEvent) {
   if (event.key === 'Escape' && opened.value) openSelect.value = null;
 }
 function handleViewportChange() {
-  if (opened.value && !repositioning) positionPanel(false);
+  if (!opened.value || repositioning) return;
+  positionPanel(false);
+}
+// scroll 不冒泡，但 window 上的 capture 监听照样能收到后代元素的 scroll。面板内部
+// 滚动不该触发重定位：位置本来就没变，白跑一次还会跟滚动手势抖动。
+// 单独一个 handler 而不是在 handleViewportChange 里判 target —— resize 的 target 是
+// window，不是 Node，喂给 contains() 不安全。
+function onViewportScroll(event: Event) {
+  const target = event.target as Node | null;
+  if (target && panel.value?.contains(target)) return;
+  handleViewportChange();
 }
 
 watch(opened, (isOpen) => {
@@ -138,19 +151,19 @@ watch(opened, (isOpen) => {
     document.addEventListener('pointerdown', onPointerDown, true);
     document.addEventListener('keydown', onKeydown, true);
     window.addEventListener('resize', handleViewportChange);
-    window.addEventListener('scroll', handleViewportChange, true);
+    window.addEventListener('scroll', onViewportScroll, true);
   } else {
     document.removeEventListener('pointerdown', onPointerDown, true);
     document.removeEventListener('keydown', onKeydown, true);
     window.removeEventListener('resize', handleViewportChange);
-    window.removeEventListener('scroll', handleViewportChange, true);
+    window.removeEventListener('scroll', onViewportScroll, true);
   }
 });
 onBeforeUnmount(() => {
   document.removeEventListener('pointerdown', onPointerDown, true);
   document.removeEventListener('keydown', onKeydown, true);
   window.removeEventListener('resize', handleViewportChange);
-  window.removeEventListener('scroll', handleViewportChange, true);
+  window.removeEventListener('scroll', onViewportScroll, true);
   if (openSelect.value === id) openSelect.value = null;
 });
 </script>
@@ -180,20 +193,25 @@ onBeforeUnmount(() => {
       v-if="opened"
       ref="panel"
       class="sl-select-panel sl-select-panel-fixed"
-      role="listbox"
-      :aria-label="ariaLabel || undefined"
       :style="panelStyle"
     >
       <div
-        v-for="option in rows"
-        :key="option.value"
-        class="sl-select-option"
-        :class="{ 'sl-select-option-on': option.value === modelValue }"
-        role="option"
-        :aria-selected="option.value === modelValue"
-        @click="select(option.value)"
+        class="sl-select-panel-scroll"
+        role="listbox"
+        :aria-label="ariaLabel || undefined"
+        :style="scrollStyle"
       >
-        {{ option.label }}
+        <div
+          v-for="option in rows"
+          :key="option.value"
+          class="sl-select-option"
+          :class="{ 'sl-select-option-on': option.value === modelValue }"
+          role="option"
+          :aria-selected="option.value === modelValue"
+          @click="select(option.value)"
+        >
+          {{ option.label }}
+        </div>
       </div>
     </div>
   </div>

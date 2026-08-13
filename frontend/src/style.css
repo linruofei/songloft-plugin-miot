@@ -117,7 +117,13 @@ html.webf-engine .miot-app * { transform-origin: 0 0; }
 .sl-select-trigger .sl-button-content { display: flex; width: 100%; height: 100%; align-items: center; justify-content: space-between; gap: 8px; }
 .sl-select-trigger .sl-button-label { min-width: 0; flex: 1; overflow: hidden; color: var(--md-on-surface); font-weight: 400; text-align: left; text-overflow: ellipsis; }
 .sl-select-trigger .sl-icon { flex-shrink: 0; color: var(--md-on-surface-variant); }
-.sl-select-panel { position: absolute; z-index: 70; top: calc(100% + 4px); left: 0; box-sizing: border-box; max-height: 320px; overflow-y: auto; padding: 4px 0; border: 1px solid var(--md-outline-variant); border-radius: var(--md-radius-sm); background: var(--md-surface-container); box-shadow: var(--md-shadow-2); }
+/* 面板本体绝不能自己是滚动容器：WebF 给 fixed 元素做滚动补偿时，会把「自己的
+   scrollTop」也算进去（rendering/box_model.dart:1807，getTotalScrollOffset 从
+   this.scrollTop 起算，再逐级累加祖先），于是在面板里滚 N px，面板就整体往下画
+   N px —— 表现是「一滚就跑到下面去了」（songloft-org/songloft#397）。
+   滚动交给内层 .sl-select-panel-scroll，外层只管定位和外观。 */
+.sl-select-panel { position: absolute; z-index: 70; top: calc(100% + 4px); left: 0; box-sizing: border-box; overflow: hidden; border: 1px solid var(--md-outline-variant); border-radius: var(--md-radius-sm); background: var(--md-surface-container); box-shadow: var(--md-shadow-2); }
+.sl-select-panel-scroll { box-sizing: border-box; max-height: 318px; overflow-y: auto; padding: 4px 0; }
 .sl-select-panel-fixed { position: fixed; z-index: 300; top: auto; left: auto; }
 /* 透明全屏遮罩：webf 不会对「点空白处」派发 document pointerdown，
    纯靠 document 监听收不起下拉。挂一个 fixed 遮罩兜住所有面板外的点击，
