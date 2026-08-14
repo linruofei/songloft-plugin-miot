@@ -262,6 +262,10 @@ html.webf-engine .player-volume-slider { width: 28px; height: 112px; transform: 
    这里给显式 px 兜住。 */
 html.webf-engine .player-volume-slider .sl-slider-native { width: 28px; height: 112px; }
 html.webf-engine .player-sleep-popup { left: calc(50% - 140px); transform: none; }
+/* PlayerBar 工具区右对齐，弹层居中定位会从右侧溢出视口。
+   改为右对齐：弹层右边与按钮右边对齐，向左展开。 */
+.player-bar-tools .player-sleep-popup { left: auto; right: 0; transform: none; }
+html.webf-engine .player-bar-tools .player-sleep-popup { left: auto; right: 0; }
 html.webf-engine .fullscreen-player { height: 100vh; background: var(--md-surface, #FEF7FF); }
 html.webf-engine .fullscreen-playback { background: var(--md-surface, #FEF7FF); }
 html.webf-engine .settings-page { height: 100vh; min-height: 0; }

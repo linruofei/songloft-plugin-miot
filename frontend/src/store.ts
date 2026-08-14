@@ -423,7 +423,12 @@ export async function seekPlayer(position: number): Promise<void> {
 export async function setVolume(volume: number): Promise<void> {
   const normalized = Math.max(0, Math.min(100, Math.round(volume)));
   state.player.volume = normalized;
-  await playerCommand('/mina/volume', { volume: normalized });
+  try {
+    await post('/mina/volume', { ...targetBody(), volume: normalized });
+    requestStatusRefresh();
+  } catch (error) {
+    notify(messageOf(error), 'error');
+  }
 }
 
 export async function refreshPlayerStatus(): Promise<void> {

@@ -246,7 +246,7 @@ watch(activeLyric, centerActiveLyric);
 <template>
   <div class="fullscreen-player page-view">
     <div class="fullscreen-close-button">
-      <SlButton variant="icon" icon="keyboard_arrow_down" player-icon class="player-tool-button" title="收起播放器" @click="close" />
+      <SlButton variant="icon" icon="keyboard_arrow_down" class="player-tool-button" title="收起播放器" @click="close" />
     </div>
     <main class="fullscreen-inner">
       <div class="fullscreen-layout">
