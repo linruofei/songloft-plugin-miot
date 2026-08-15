@@ -220,6 +220,16 @@ assert.match(style, /\.player-sleep-popup[^}]*width: 280px[^}]*max-width: calc\(
 // PlayerBar 工具区弹层右对齐，防止右侧溢出视口（#388）
 assert.match(style, /\.player-bar-tools \.player-sleep-popup \{ left: auto; right: 0; transform: none; \}/);
 assert.match(style, /html\.webf-engine \.player-bar-tools \.player-sleep-popup \{ left: auto; right: 0; \}/);
+// WebF 下遮罩必须与弹层同一个挂载父级，否则透明遮罩会压住整个弹层、弹层内一切都点不到。
+// WebF 按包含块挂载 widget：fixed 挂到 <html>，absolute 留在最近的定位祖先里，于是
+// 遮罩的 z-index 231 在 <html> 层排序，而弹层的 232 只在 .player-popup-anchor 内有效，
+// 其子树高度由祖先（.fullscreen-playback 220 / .player-bar-shell 80）决定，双双输给 231。
+// 实测（Android WebF）点音量弹层里的静音按钮不会静音、只把弹层关掉。
+assert.match(style, /\.player-popup-dismiss \{ position: fixed; z-index: 231; inset: 0;/);
+assert.match(
+  style,
+  /html\.webf-engine \.player-popup-dismiss \{ position: absolute; inset: auto; top: -100vh; right: -100vw; bottom: -100vh; left: -100vw; \}/,
+);
 assert.match(sleepTimerPopup, /navigation\.playerPopup = props\.popupId;\s*emit\('refresh'\)/);
 assert.match(style, /\.fullscreen-stage\s*\{\s*flex: 1 1 0%/);
 assert.match(style, /\.fullscreen-mobile-slide \.fullscreen-cover-frame[^}]*height: 72vw[^}]*max-height: 320px/);

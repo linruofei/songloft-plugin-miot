@@ -242,6 +242,20 @@ html.webf-engine .miot-app * { transform-origin: 0 0; }
 .player-mini-progress-active { height: 100%; background: var(--md-primary); }
 .player-popup-anchor { position: relative; display: inline-flex; align-items: center; justify-content: center; }
 .player-popup-dismiss { position: fixed; z-index: 231; inset: 0; background: transparent; }
+/* WebF 下遮罩必须与弹层挂在**同一个**定位父级里，否则它会盖住整个弹层。
+   WebF 按包含块决定 widget 挂载位置：`position: fixed` 一律挂到 <html>（视口），
+   `position: absolute` 留在最近的定位祖先里。于是这两层的 z-index 不在同一个父级
+   里比较 —— 遮罩的 231 直接参与 <html> 层排序，而弹层的 232 只在
+   `.player-popup-anchor` 内部有效，它整棵子树的高度由祖先决定
+   （`.fullscreen-playback` fixed z-index 220 / `.player-bar-shell` fixed 80），
+   两者都 < 231。结果：透明遮罩压在弹层之上，弹层里**一切都点不到**。
+   实测（Android WebF）点音量弹层里的静音按钮不会静音、只把弹层关掉，音量滑块同理
+   收不到任何指针事件。浏览器按规范是依 DOM 树归属堆叠上下文的，弹层本就在上面，
+   所以这条只在 WebF 下改：遮罩改成 absolute（与弹层同父），四边各外扩一个视口保证
+   仍能覆盖全屏接住「点外面关闭」。`.page-view` 是 overflow: hidden，外扩不会撑出滚动条。
+   备选方案是把弹层也改成 `position: fixed` + JS 视口坐标（`.player-mode-popup` 与
+   `SlSelect` 就是这么做的），代价是每个弹层都要自己算坐标。 */
+html.webf-engine .player-popup-dismiss { position: absolute; inset: auto; top: -100vh; right: -100vw; bottom: -100vh; left: -100vw; }
 .player-mode-popup, .player-volume-popup, .player-sleep-popup { position: absolute; z-index: 232; bottom: calc(100% + 8px); left: 50%; background: var(--md-surface); border: 1px solid var(--md-outline-variant); border-radius: 12px; box-shadow: var(--md-shadow-3); }
 .player-mode-popup { position: fixed; width: 160px; padding: 8px 0; transform: none; }
 .player-mode-option { width: 100%; height: 48px; min-height: 48px; display: flex; align-items: center; gap: 12px; padding: 8px 16px; border: 0; background: transparent; color: var(--md-on-surface); font-size: 14px; text-align: left; }
@@ -257,9 +271,11 @@ html.webf-engine .miot-app * { transform-origin: 0 0; }
 .player-sleep-popup { width: 280px; max-width: calc(100vw - 32px); max-height: calc(100vh - 96px); overflow-y: auto; transform: translateX(-50%); }
 html.webf-engine .player-volume-popup { left: calc(50% - 32px); transform: none; }
 html.webf-engine .player-volume-slider { width: 28px; height: 112px; transform: none; }
-/* 原生滑块自己读 renderStyle.width/height 决定画布尺寸，`.sl-slider-native` 上的
-   百分比在它那儿解析不出来就会落回默认 160×28（横条），把 64px 宽的弹出层撑破。
-   这里给显式 px 兜住。 */
+/* 原生滑块自己读 renderStyle 决定画布尺寸，而**旧版宿主**（≤ 2.11.5）读的是 CSS
+   **声明值**而不是解析后的像素：`width: 100%` 在那儿存的是 `1.0`，滑块会塌成
+   1×1 —— 既看不见、也点不到（可命中区域只剩左上角一个像素）。宿主已修
+   （`songloft_slider.dart` 的 `_resolveSide` 改读 `computedValue`），但插件要在旧
+   宿主上也能用，所以这里保留显式 px：px 的声明值本身就是像素，新旧宿主都走对。 */
 html.webf-engine .player-volume-slider .sl-slider-native { width: 28px; height: 112px; }
 html.webf-engine .player-sleep-popup { left: calc(50% - 140px); transform: none; }
 /* PlayerBar 工具区右对齐，弹层居中定位会从右侧溢出视口。
