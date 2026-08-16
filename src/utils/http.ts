@@ -9,7 +9,8 @@
 
 /// <reference types="@songloft/plugin-sdk" />
 
-import { CookieJar, parseCookies } from './cookie';
+import { getSetCookie, parseSetCookie } from '@songloft/plugin-sdk';
+import { CookieJar } from './cookie';
 
 /** fetch请求选项（扩展） */
 export interface FetchOptions {
@@ -21,11 +22,20 @@ export interface FetchOptions {
 
 type HeaderValue = string | string[];
 
-/** 响应头包装器（支持 case-insensitive get + getSetCookie） */
+/**
+ * 响应头包装器（case-insensitive get + getSetCookie）。
+ *
+ * Set-Cookie 不由本类解析：多条 Set-Cookie 在老宿主上被折叠成 ", " 单串后
+ * 无法可靠切回（cookie 的 Expires 属性自带 ", "）。改由 httpFetch 在**原始**
+ * Response 上调 SDK 的 getSetCookie() 取好再传进来——新宿主走无损数组，
+ * 老宿主由 SDK 内部做启发式兜底（songloft-org/songloft#401）。
+ */
 class ResponseHeaders {
   private _raw: Record<string, HeaderValue>;
-  constructor(raw: Record<string, HeaderValue>) {
+  private _setCookies: string[];
+  constructor(raw: Record<string, HeaderValue>, setCookies: string[] = []) {
     this._raw = raw || {};
+    this._setCookies = setCookies;
   }
   get(name: string): string | null {
     const direct = this._raw[name];
@@ -40,21 +50,7 @@ class ResponseHeaders {
     return null;
   }
   getSetCookie(): string[] {
-    const raw = this.getRaw('set-cookie');
-    if (!raw) return [];
-    if (Array.isArray(raw)) {
-      return raw.flatMap(v => splitSetCookieHeader(String(v)));
-    }
-    return splitSetCookieHeader(String(raw));
-  }
-
-  private getRaw(name: string): HeaderValue | null {
-    if (this._raw[name] !== undefined) return this._raw[name];
-    const lower = name.toLowerCase();
-    for (const key of Object.keys(this._raw)) {
-      if (key.toLowerCase() === lower) return this._raw[key];
-    }
-    return null;
+    return this._setCookies.slice();
   }
 }
 
@@ -88,6 +84,9 @@ export async function httpFetch(
   const body = options.body;
 
   const resp = await fetch(url, { method, headers, body });
+  // Set-Cookie 必须在**原始** Response 上取：新宿主把 get/getSetCookie 挂成
+  // 不可枚举属性，下面的 Object.keys 拷贝会把它们丢掉。
+  const setCookies = getSetCookie(resp);
   // 把 Response.headers 拆成普通对象，方便 ResponseHeaders 包装。
   const headerObj: Record<string, HeaderValue> = {};
   if (resp.headers && typeof (resp.headers as unknown as Record<string, unknown>) === 'object') {
@@ -102,7 +101,7 @@ export async function httpFetch(
     ok: resp.ok,
     status: resp.status,
     statusText: resp.statusText || '',
-    headers: new ResponseHeaders(headerObj),
+    headers: new ResponseHeaders(headerObj, setCookies),
     text() { return text; },
     json() { return JSON.parse(text); },
   };
@@ -165,74 +164,11 @@ export async function fetchWithRedirects(
 
 /** 从 Response 收集 Set-Cookie 头并加到 CookieJar */
 function collectCookies(response: HttpResponse, url: string, cookieJar: CookieJar): void {
-  const setCookieHeaders: string[] = [];
-
-  if (typeof response.headers.getSetCookie === 'function') {
-    const cookies = response.headers.getSetCookie();
-    setCookieHeaders.push(...cookies);
-  } else {
-    const raw = response.headers.get('set-cookie');
-    if (raw) {
-      setCookieHeaders.push(...splitSetCookieHeader(raw));
-    }
-  }
-
+  // httpFetch 已在原始 Response 上取好 Set-Cookie（宿主兼容逻辑在 SDK 里）。
+  const setCookieHeaders = response.headers.getSetCookie();
   if (setCookieHeaders.length > 0) {
-    const cookies = parseCookies(setCookieHeaders, url);
-    cookieJar.add(cookies);
+    cookieJar.add(parseSetCookie(setCookieHeaders, url));
   }
-}
-
-/**
- * 分割合并在一起的 Set-Cookie 头。
- * HTTP/1.1 中多个 Set-Cookie 可能被合并为逗号分隔的单个头。
- */
-function splitSetCookieHeader(header: string): string[] {
-  const result: string[] = [];
-  let current = '';
-  let i = 0;
-
-  while (i < header.length) {
-    const commaIdx = header.indexOf(',', i);
-    if (commaIdx === -1) {
-      current += header.slice(i);
-      break;
-    }
-
-    const afterComma = header.slice(commaIdx + 1).trimStart();
-    const eqIdx = afterComma.indexOf('=');
-    const semiIdx = afterComma.indexOf(';');
-    const spaceIdx = afterComma.indexOf(' ');
-
-    if (eqIdx > 0 && (semiIdx === -1 || eqIdx < semiIdx) && (spaceIdx === -1 || eqIdx < spaceIdx || spaceIdx > 0)) {
-      const beforeComma = header.slice(i, commaIdx);
-      if (isDateFragment(beforeComma)) {
-        current += header.slice(i, commaIdx + 1);
-        i = commaIdx + 1;
-      } else {
-        current += header.slice(i, commaIdx);
-        result.push(current.trim());
-        current = '';
-        i = commaIdx + 1;
-      }
-    } else {
-      current += header.slice(i, commaIdx + 1);
-      i = commaIdx + 1;
-    }
-  }
-
-  if (current.trim()) {
-    result.push(current.trim());
-  }
-
-  return result;
-}
-
-/** 检查字符串是否像日期片段（用于区分 expires 中的逗号 vs cookie 分隔逗号） */
-function isDateFragment(str: string): boolean {
-  const trimmed = str.trim();
-  const lastPart = trimmed.split(';').pop()?.trim() || '';
-  return /expires\s*=\s*\w{3}$/i.test(lastPart) || /\b(Mon|Tue|Wed|Thu|Fri|Sat|Sun)$/i.test(lastPart);
 }
 
 /** 解析相对 URL 为绝对 URL */

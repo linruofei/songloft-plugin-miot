@@ -16,7 +16,7 @@
   },
   "devDependencies": {
     "@songloft/plugin-builder": "^2.13.7",
-    "@songloft/plugin-sdk": "^2.13.7",
+    "@songloft/plugin-sdk": "^2.13.8",
     "pinyin-pro": "^3.28.1",
     "segmentit": "^2.0.3",
     "typescript": "^5.9.3"

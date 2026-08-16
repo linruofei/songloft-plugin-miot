@@ -816,14 +816,3 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
   }
   return btoa(binary);
 }
-
-/**
- * 从 Response 中获取 Set-Cookie 头
- */
-function getSetCookieHeaders(response: Response): string[] {
-  if (typeof (response.headers as any).getSetCookie === 'function') {
-    return (response.headers as any).getSetCookie() as string[];
-  }
-  const raw = response.headers.get('set-cookie');
-  return raw ? [raw] : [];
-}
