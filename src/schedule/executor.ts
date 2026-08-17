@@ -9,6 +9,7 @@ import { AccountManager } from '../account/manager';
 import { MinaService } from '../service/service';
 import { PlaylistManagerMap } from '../player/manager';
 import { IndexingManager } from '../indexing/manager';
+import type { IndexedPlaylist } from '../indexing/manager';
 import { ConversationMonitor } from '../conversation/monitor';
 import { GroupCoordinator } from '../group/coordinator';
 import type { ScheduledTask, TaskLog, TaskTarget, TaskParams, PlayMode, DeviceConfig } from '../types';
@@ -299,10 +300,14 @@ export class TaskExecutor {
       throw new Error('歌曲索引尚未就绪，请确保已刷新索引');
     }
 
-    // 通过名称或 ID 查找歌单（前端选择器产出 playlist_id，语音口令产出 playlist_name）
-    let playlist = params.playlist_name
-      ? this.indexingManager.findPlaylistByName(params.playlist_name)
-      : this.indexingManager.getPlaylistById(params.playlist_id!);
+    // 通过名称或 ID 查找歌单（前端选择器产出 playlist_id，语音口令产出 playlist_name）。
+    // miss 时按需刷新索引，捡回运行期间新建/变更的歌单（#83, #84）。
+    let playlist: IndexedPlaylist | null = null;
+    if (params.playlist_name) {
+      playlist = await this.indexingManager.findPlaylistByNameWithRefresh(params.playlist_name);
+    } else {
+      playlist = await this.indexingManager.getPlaylistByIdWithRefresh(params.playlist_id!);
+    }
     if (!playlist) {
       throw new Error(`未找到匹配的歌单: ${params.playlist_name || params.playlist_id}`);
     }

@@ -674,7 +674,7 @@ export class VoiceEngine {
       if (!(await this.indexingManager.waitForReady(INDEX_READY_WAIT_MS))) {
         return { kind: 'playlist', found: false, detail: '索引未就绪，无法预览搜索结果' };
       }
-      const pl = this.indexingManager.findPlaylistByName(argument);
+      const pl = await this.indexingManager.findPlaylistByNameWithRefresh(argument);
       if (pl) {
         return { kind: 'playlist', found: true, detail: `${pl.name}（${pl.songCount} 首）` };
       }
@@ -1014,8 +1014,8 @@ export class VoiceEngine {
       songloft.log.info(`[VoiceEngine] No name specified, using default playlist: ${playlistName}`);
     }
 
-    // 模糊匹配歌单
-    const matchedPlaylist = this.indexingManager.findPlaylistByName(playlistName);
+    // 模糊匹配歌单（miss 时按需刷新索引，捡回运行期间新建的歌单 #84）
+    const matchedPlaylist = await this.indexingManager.findPlaylistByNameWithRefresh(playlistName);
     if (!matchedPlaylist) {
       songloft.log.warn(`[VoiceEngine] Playlist not found: ${playlistName}`);
       await this.minaService.textToSpeech(accountId, deviceId, `未找到歌单：${playlistName}`);

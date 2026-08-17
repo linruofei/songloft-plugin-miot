@@ -267,6 +267,9 @@ const PLAYLIST_CACHE_WAIT_MS = 3000;
 /** 独立歌曲 miss 后的全量刷新冷却，避免每条未命中口令都重建索引。 */
 const STANDALONE_REFRESH_COOLDOWN_MS = 60_000;
 
+/** 歌单 miss 后的全量刷新冷却，避免每条未命中口令都重建索引（与独立歌曲路径对称）。 */
+const PLAYLIST_REFRESH_COOLDOWN_MS = 60_000;
+
 /** 进程内拼音缓存：跨 refresh 复用，避免同一歌手/歌名反复转拼音。 */
 const PINYIN_CACHE_LIMIT = 20000;
 const pinyinCache = new Map<string, string>();
@@ -432,6 +435,7 @@ export class IndexingManager {
   private isRefreshing: boolean = false;
   private indexReady: boolean = false;
   private lastStandaloneRefreshTime: number = 0;
+  private lastPlaylistRefreshTime: number = 0;
   private pendingRefreshPromise: Promise<RefreshResult> | null = null;
 
   // ===== 歌单歌曲缓存的加载状态机 =====
@@ -837,12 +841,77 @@ export class IndexingManager {
   }
 
   /**
+   * 带按需刷新的歌单查找。
+   *
+   * 歌单内存索引只在插件启动时构建一次，运行期间新建的歌单不在索引里，
+   * 语音口令会误报「未找到歌单」（songloft-org/songloft-plugin-miot#84）。
+   * 先查内存索引，miss 时触发一次带冷却的全量刷新再重试，捡回新建歌单。
+   *
+   * 与 findStandaloneSongByName 的刷新策略对称：只有真 miss 才 refresh，
+   * 且带冷却，避免每条未命中口令都重建索引。
+   *
+   * @param name - 歌单名称
+   * @returns 匹配到的歌单，未找到返回 null
+   */
+  async findPlaylistByNameWithRefresh(name: string): Promise<IndexedPlaylist | null> {
+    if (!name) return null;
+
+    let result = this.findPlaylistByName(name);
+    if (result) return result;
+
+    // 内存索引确实没有这个歌单，才值得为「刚被新建、索引还没见过」重建（仍带冷却）。
+    const now = Date.now();
+    if (!this.isRefreshing && now - this.lastPlaylistRefreshTime >= PLAYLIST_REFRESH_COOLDOWN_MS) {
+      this.lastPlaylistRefreshTime = now;
+      songloft.log.warn(`[IndexingManager] findPlaylistByNameWithRefresh: 内存索引未命中「${name}」，触发全量刷新`);
+      await this.refresh();
+      result = this.findPlaylistByName(name);
+    } else {
+      const remainingMs = Math.max(0, PLAYLIST_REFRESH_COOLDOWN_MS - (now - this.lastPlaylistRefreshTime));
+      songloft.log.info(`[IndexingManager] findPlaylistByNameWithRefresh: skip refresh (refreshing=${this.isRefreshing}, cooldown=${remainingMs}ms)`);
+    }
+
+    return result;
+  }
+
+  /**
    * 按ID获取歌单
    * @param id - 歌单ID
    * @returns 歌单信息，未找到返回 null
    */
   getPlaylistById(id: number): IndexedPlaylist | null {
     return this.playlists.find(pl => pl.id === id) ?? null;
+  }
+
+  /**
+   * 带按需刷新的歌单 ID 查找。
+   *
+   * 与 findPlaylistByNameWithRefresh 对称：按 ID 查找歌单，miss 时触发一次带冷却的
+   * 全量刷新再重试。解决定时任务引用已过期歌单 ID 的问题
+   * （songloft-org/songloft-plugin-miot#83）。
+   *
+   * @param id - 歌单ID
+   * @returns 匹配到的歌单，未找到返回 null
+   */
+  async getPlaylistByIdWithRefresh(id: number): Promise<IndexedPlaylist | null> {
+    if (!id || isNaN(id)) return null;
+
+    let result = this.getPlaylistById(id);
+    if (result) return result;
+
+    // 内存索引确实没有这个歌单 ID，才值得刷新（捡回扫描后 auto-create 的新 ID 等）
+    const now = Date.now();
+    if (!this.isRefreshing && now - this.lastPlaylistRefreshTime >= PLAYLIST_REFRESH_COOLDOWN_MS) {
+      this.lastPlaylistRefreshTime = now;
+      songloft.log.warn(`[IndexingManager] getPlaylistByIdWithRefresh: 内存索引未命中 id=${id}，触发全量刷新`);
+      await this.refresh();
+      result = this.getPlaylistById(id);
+    } else {
+      const remainingMs = Math.max(0, PLAYLIST_REFRESH_COOLDOWN_MS - (now - this.lastPlaylistRefreshTime));
+      songloft.log.info(`[IndexingManager] getPlaylistByIdWithRefresh: skip refresh (refreshing=${this.isRefreshing}, cooldown=${remainingMs}ms)`);
+    }
+
+    return result;
   }
 
   /**
