@@ -595,12 +595,20 @@ export class PlaylistManager {
     });
 
     const song = this.getCurrentSong();
-    if (song && song.duration > 0 && this.playStartTimeMs > 0) {
-      const elapsedSec = ((Date.now() - this.playStartTimeMs) / 1000) * this.playbackSpeed;
-      const remaining = song.duration - elapsedSec;
+    if (song && song.duration > 0) {
+      // 以真实曲内位置重锚 playStartTimeMs：暂停期间 playStartTimeMs 一直停在歌曲起播时刻，
+      // 直接用它算 elapsed 会把暂停时长也算进已播时长，长暂停后 remaining 为负 → 不注册定时器 →
+      // 歌曲自然播完时 onSongFinished 不触发，音箱循环重拉同一 URL，表现为「单曲循环、不推进列表」
+      // (songloft-org/songloft#404)。与 resetAutoNextTimer 同源：按 1/speed 反向缩放锚点。
+      this.playStartTimeMs = Date.now() - (resumeFromSec / this.playbackSpeed) * 1000;
+      const remaining = song.duration - resumeFromSec;
       if (remaining > 0) {
         this.startCheckTimer(remaining / this.playbackSpeed);
-        songloft.log.info(`[PlaylistManager] Timer reset after resume: remaining=${remaining.toFixed(1)}s`);
+        songloft.log.info(`[PlaylistManager] Timer reset after resume: remaining=${remaining.toFixed(1)}s position=${resumeFromSec.toFixed(1)}s`);
+      } else {
+        // 已到尾部（暂停在曲末）：立即触发自动切歌，避免续播后无定时器推进
+        this.startCheckTimer(0.1);
+        songloft.log.info(`[PlaylistManager] Timer reset after resume: song at tail (remaining=${remaining.toFixed(1)}s), triggering auto-next`);
       }
     }
 
