@@ -3,6 +3,7 @@
 // 实现小米3步登录流程：serviceLogin → serviceLoginAuth2 → 重定向获取 serviceToken
 
 import { CookieJar } from '../utils/cookie';
+import { getSetCookie, parseSetCookie } from '@songloft/plugin-sdk';
 import { fetchWithRedirects, fetchSync } from '../utils/http';
 import { md5, generateDeviceId } from '../utils/crypto';
 import {
@@ -139,22 +140,27 @@ export class MinaAuth {
       headers['Cookie'] = cookieHeader;
     }
 
-    const response = await fetchSync(captchaUrl, {
-      method: 'GET',
-      headers,
-    });
+    // 验证码是二进制图片（PNG/JPEG），必须用 arrayBuffer() 获取。
+    // httpFetch 只调用 text() 会对非 UTF-8 二进制返回空字符串，故此处直接用原生 fetch。
+    const resp = await fetch(captchaUrl, { method: 'GET', headers });
 
     // 收集 cookies
-    const setCookieHeaders = response.headers.getSetCookie();
+    const setCookieHeaders = getSetCookie(resp);
     if (setCookieHeaders.length > 0) {
-      this.cookieJar.addFromHeaders(setCookieHeaders, captchaUrl);
+      this.cookieJar.add(parseSetCookie(setCookieHeaders, captchaUrl));
     }
 
     // 获取 ick cookie
     const ick = this.cookieJar.getValue('ick') || '';
 
-    // 在 QuickJS 中 body 已经是字符串（可能是 base64 或二进制字符串）
-    const imageBase64 = response.text() || '';
+    // 将二进制图片转为 base64
+    const ab = await resp.arrayBuffer();
+    const bytes = new Uint8Array(ab);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    const imageBase64 = btoa(binary);
 
     this.captchaIck = ick;
     return { imageBase64, ick };

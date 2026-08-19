@@ -20,6 +20,7 @@ const password = ref('');
 const tokenUserId = ref('');
 const passToken = ref('');
 const captcha = ref('');
+const captchaImage = ref('');
 const verifyCode = ref('');
 const verifyUrl = ref('');
 const loginAccountId = ref('');
@@ -93,15 +94,15 @@ async function submitPassword() {
     const result = await postEnvelope<Record<string, unknown>>('/auth/login', { username: username.value.trim(), password: password.value });
     loginAccountId.value = String(result.account_id || username.value.trim());
     loginMessage.value = String(result.message || '');
-    if (result.state === 'need_captcha' || result.state === 1) loginMessage.value = '请输入图形验证码';
+    if (result.state === 'need_captcha' || result.state === 1) { captchaImage.value = String(result.captcha_url || ''); loginMessage.value = '请输入图形验证码'; }
     else if (result.state === 'need_verify' || result.state === 2) { verifyUrl.value = String(result.verify_url || ''); loginMessage.value = '请完成二次验证后输入验证码'; }
-    else { notify('账号登录成功', 'success'); username.value = ''; password.value = ''; await loadAccountsAndDevices(); }
+    else { notify('账号登录成功', 'success'); username.value = ''; password.value = ''; captchaImage.value = ''; await loadAccountsAndDevices(); }
   } catch (error) { loginMessage.value = messageOf(error); notify(loginMessage.value, 'error'); }
   finally { loginBusy.value = false; }
 }
 async function submitCaptcha() {
   if (!captcha.value) return;
-  try { const result = await postEnvelope<Record<string, unknown>>('/auth/captcha', { account_id: loginAccountId.value, captcha: captcha.value }); loginMessage.value = String(result.message || ''); if (result.state === 'success' || result.state === 0) { notify('登录成功', 'success'); await loadAccountsAndDevices(); } } catch (error) { notify(messageOf(error), 'error'); }
+  try { const result = await postEnvelope<Record<string, unknown>>('/auth/captcha', { account_id: loginAccountId.value, captcha: captcha.value }); loginMessage.value = String(result.message || ''); if (result.state === 'need_captcha' || result.state === 1) { captchaImage.value = String(result.captcha_url || ''); loginMessage.value = '验证码错误，请重新输入'; } else if (result.state === 'success' || result.state === 0) { captchaImage.value = ''; notify('登录成功', 'success'); await loadAccountsAndDevices(); } } catch (error) { notify(messageOf(error), 'error'); }
 }
 async function submitVerify() {
   if (!verifyCode.value) return;
@@ -153,7 +154,7 @@ async function saveModels() { const values = extraModels.value.split(',').map((i
     <div class="tab-strip"><button :class="{ active: authTab === 'qrcode' }" @click="authTab = 'qrcode'">扫码登录</button><button :class="{ active: authTab === 'password' }" @click="authTab = 'password'">账号密码</button><button :class="{ active: authTab === 'token' }" @click="authTab = 'token'">手动 Token</button></div>
     <div class="form-body">
       <template v-if="authTab === 'qrcode'"><p class="field-help">使用米家 App 扫描二维码，扫码成功后会自动创建账号。</p><SlButton variant="filled" block label="获取二维码" icon="qr_code_2" :disabled="qrBusy" @click="startQr" /><div v-if="qrUrl" class="qr-box"><img :src="qrUrl" alt="登录二维码" /><p>{{ qrStatus }}</p></div><p v-else-if="qrStatus" class="field-help">{{ qrStatus }}</p></template>
-      <template v-else-if="authTab === 'password'"><div class="field"><label class="field-label">用户名</label><SlInput v-model="username" placeholder="手机号或邮箱" aria-label="用户名" /></div><div class="field"><label class="field-label">密码</label><SlInput v-model="password" type="password" placeholder="密码" aria-label="密码" @submit="submitPassword" /></div><SlButton variant="filled" block label="登录并添加" icon="login" :disabled="loginBusy" @click="submitPassword" /><p v-if="loginMessage" class="field-help">{{ loginMessage }}</p><div v-if="loginMessage.includes('验证码')" class="sub-panel"><SlInput v-model="captcha" placeholder="输入图形验证码" aria-label="验证码" /><SlButton variant="filled" label="提交验证码" @click="submitCaptcha" /></div><div v-if="verifyUrl || loginMessage.includes('二次')" class="sub-panel"><SlButton variant="outlined" label="打开验证页面" icon="open_in_new" @click="openVerifyPage" /><div class="inline-fields" style="margin-top:8px"><SlInput v-model="verifyCode" placeholder="验证码" aria-label="二次验证码" /><SlButton variant="filled" label="提交" @click="submitVerify" /></div></div></template>
+      <template v-else-if="authTab === 'password'"><div class="field"><label class="field-label">用户名</label><SlInput v-model="username" placeholder="手机号或邮箱" aria-label="用户名" /></div><div class="field"><label class="field-label">密码</label><SlInput v-model="password" type="password" placeholder="密码" aria-label="密码" @submit="submitPassword" /></div><SlButton variant="filled" block label="登录并添加" icon="login" :disabled="loginBusy" @click="submitPassword" /><p v-if="loginMessage" class="field-help">{{ loginMessage }}</p><div v-if="loginMessage.includes('验证码')" class="sub-panel"><img v-if="captchaImage" :src="'data:image/png;base64,' + captchaImage" alt="图形验证码" class="captcha-img" /><SlInput v-model="captcha" placeholder="输入图形验证码" aria-label="验证码" /><SlButton variant="filled" label="提交验证码" @click="submitCaptcha" /></div><div v-if="verifyUrl || loginMessage.includes('二次')" class="sub-panel"><SlButton variant="outlined" label="打开验证页面" icon="open_in_new" @click="openVerifyPage" /><div class="inline-fields" style="margin-top:8px"><SlInput v-model="verifyCode" placeholder="验证码" aria-label="二次验证码" /><SlButton variant="filled" label="提交" @click="submitVerify" /></div></div></template>
       <template v-else><p class="field-help">从浏览器 Cookie 中获取 userId 和 passToken。凭据只发送给 MIoT 插件，不会显示在日志中。</p><div class="field"><label class="field-label">User ID</label><SlInput v-model="tokenUserId" placeholder="Cookie 中的 userId" aria-label="User ID" /></div><div class="field"><label class="field-label">Pass Token</label><SlInput v-model="passToken" type="password" placeholder="Cookie 中的 passToken" aria-label="Pass Token" /></div><SlButton variant="filled" block label="添加账号" icon="key" @click="addToken" /></template>
     </div>
   </SectionCard>
