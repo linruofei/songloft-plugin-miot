@@ -179,7 +179,7 @@ html.webf-engine .miot-app * { transform-origin: 0 0; }
 .sl-list-view-html { overflow-y: auto; border-top: 1px solid var(--md-outline-variant); }
 
 .search-bar { display: flex; align-items: center; gap: 8px; height: 48px; margin-bottom: 12px; padding: 0 12px; border: 1px solid var(--md-outline-variant); border-radius: var(--md-radius-full); background: var(--md-surface-container-low); color: var(--md-on-surface-variant); }
-.search-bar input { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; color: var(--md-on-surface); }
+.search-bar input, .search-bar .sl-input-native { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; color: var(--md-on-surface); }
 .song-list-empty { min-height: 220px; display: flex; align-items: center; justify-content: center; color: var(--md-on-surface-variant); text-align: center; }
 .song-row { min-height: var(--miot-row-height); display: flex; align-items: center; gap: 12px; padding: 8px 8px; border-bottom: 1px solid var(--md-outline-variant); cursor: pointer; }
 .song-row-button { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; border: 0; padding: 0; margin: 0; background: transparent; color: inherit; font: inherit; text-align: inherit; cursor: pointer; outline: none; -webkit-tap-highlight-color: transparent; }

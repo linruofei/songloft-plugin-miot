@@ -101,6 +101,7 @@ async function toggleFavorite(): Promise<void> {
     });
     isFavorite.value = result.is_favorited;
     notify(result.is_favorited ? '已收藏' : '已取消收藏', 'success', 1800);
+    window.SongloftPlugin?.invokeHost?.('favorite', 'refresh', { songId: id, isFavorited: result.is_favorited }).catch(() => {});
   } catch (error) {
     isFavorite.value = previous;
     notify(messageOf(error), 'error');
@@ -229,11 +230,21 @@ async function centerActiveLyric(): Promise<void> {
   }
 }
 
+function onVisibilityChange(): void {
+  if (document.visibilityState === 'visible' || !document.hidden) {
+    coverFailed.value = false;
+  }
+}
+
 onMounted(() => {
   void loadSongDetails();
   void loadSleepTimer();
+  document.addEventListener('visibilitychange', onVisibilityChange);
 });
-onUnmounted(() => window.clearTimeout(mobileScrollTimer));
+onUnmounted(() => {
+  window.clearTimeout(mobileScrollTimer);
+  document.removeEventListener('visibilitychange', onVisibilityChange);
+});
 watch(() => state.player.current_song?.id, loadSongDetails);
 watch(() => [state.currentAccountId, state.currentDeviceId], loadSleepTimer);
 watch(
@@ -345,7 +356,6 @@ watch(activeLyric, centerActiveLyric);
             />
             <SlButton variant="icon" icon="skip_next" player-icon :icon-size="38" class="player-control-button" title="下一首" :disabled="state.playerBusy" @click="playerCommand('/player/next')" />
             <SlButton
-              :key="isFavorite ? 'fav-mobile' : 'unfav-mobile'"
               class="player-favorite-button"
               variant="icon"
               player-icon
@@ -359,7 +369,6 @@ watch(activeLyric, centerActiveLyric);
 
           <div class="fullscreen-tools">
             <SlButton
-              :key="isFavorite ? 'fav-desktop' : 'unfav-desktop'"
               class="fullscreen-tool-desktop player-favorite-button"
               variant="icon"
               player-icon

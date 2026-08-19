@@ -14,6 +14,7 @@ interface Window {
     apiPost(path: string, body?: unknown): Promise<unknown>;
     apiDelete(path: string): Promise<unknown>;
     getAuthToken?(): string;
+    invokeHost?(ns: string, method: string, params?: Record<string, unknown>): Promise<unknown>;
     onHostBack?(handler: () => boolean): void;
     host?: {
       isAvailable?(): boolean;

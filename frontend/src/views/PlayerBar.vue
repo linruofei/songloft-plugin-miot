@@ -14,7 +14,6 @@ import PlayerVolumeSlider from './PlayerVolumeSlider.vue';
 const isWide = ref(window.innerWidth > 760);
 function onResize() { isWide.value = window.innerWidth > 760; }
 onMounted(() => window.addEventListener('resize', onResize));
-onUnmounted(() => window.removeEventListener('resize', onResize));
 
 const progressPercent = computed(() => {
   const dur = Number(state.player.duration || 0);
@@ -56,9 +55,20 @@ watch(
 watch(() => state.player.current_song?.id, loadFavoriteStatus);
 watch(() => [state.currentAccountId, state.currentDeviceId], loadSleepTimer);
 
+function onVisibilityChange(): void {
+  if (document.visibilityState === 'visible' || !document.hidden) {
+    coverFailed.value = false;
+  }
+}
+
 onMounted(() => {
   void loadFavoriteStatus();
   void loadSleepTimer();
+  document.addEventListener('visibilitychange', onVisibilityChange);
+});
+onUnmounted(() => {
+  window.removeEventListener('resize', onResize);
+  document.removeEventListener('visibilitychange', onVisibilityChange);
 });
 
 function openPlayer(): void {
@@ -90,6 +100,7 @@ async function toggleFavorite(): Promise<void> {
     });
     isFavorite.value = result.is_favorited;
     notify(result.is_favorited ? '已收藏' : '已取消收藏', 'success', 1800);
+    window.SongloftPlugin?.invokeHost?.('favorite', 'refresh', { songId: id, isFavorited: result.is_favorited }).catch(() => {});
   } catch (error) {
     isFavorite.value = previous;
     notify(messageOf(error), 'error');
@@ -169,7 +180,6 @@ async function cancelSleepTimer(): Promise<void> {
           </div>
         </div>
         <SlButton
-          :key="isFavorite ? 'fav-bar' : 'unfav-bar'"
           class="player-favorite-button player-bar-favorite"
           variant="icon"
           player-icon
