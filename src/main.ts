@@ -36,6 +36,26 @@ import { initConversationStream, handleConversationWebSocket, WS_CONVERSATION_PA
 
 const router = createRouter();
 
+// server_host 失效自检：它是静态手动值，服务器换 IP（DHCP）/重启后不会自动刷新。
+// 若非回环却不在本机当前网卡地址中，音箱将被指向拉不到的旧地址 → 无声（songloft-org/songloft#405）。
+async function warnIfServerHostStale(serverHost: string): Promise<void> {
+  const host = (serverHost || '').trim().toLowerCase();
+  if (!host) return;
+  // 回环由设置页 status 单独提示，这里只查「失效但非回环」的旧地址
+  if (host.startsWith('http://localhost') || host.startsWith('http://127.')) return;
+  let localAddrs: string[] = [];
+  try {
+    localAddrs = await songloft.plugin.getNetworkAddresses();
+  } catch (e) {
+    songloft.log.warn('[URLBuilder] server_host 失效自检失败（无法获取本机网卡地址）: ' + String(e));
+    return;
+  }
+  const norm = (s: string) => s.trim().toLowerCase().replace(/\/$/, '');
+  if (!localAddrs.some(a => norm(a) === norm(host))) {
+    songloft.log.warn('[URLBuilder] server_host=' + serverHost + ' 不在当前本机网卡地址中（' + localAddrs.join(', ') + '）；服务器可能已更换 IP 或音箱不在同一网段，音箱将无法访问，请在设置页重新选择地址');
+  }
+}
+
 // 全局服务实例
 let configManager: ConfigManager;
 let accountManager: AccountManager;
@@ -74,6 +94,7 @@ async function onInit(): Promise<void> {
   if (pluginConfig.server_host) {
     setHostBaseUrl(pluginConfig.server_host);
     songloft.log.info('音箱播放 URL 基础地址已设置: ' + pluginConfig.server_host);
+    await warnIfServerHostStale(pluginConfig.server_host);
   }
 
   // 同步轮询调试日志开关到 debug 模块缓存（热路径同步读取，不能每 tick await 配置）

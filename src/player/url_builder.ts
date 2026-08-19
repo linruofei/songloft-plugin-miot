@@ -137,6 +137,12 @@ export class URLBuilder {
       url += '&speed=' + speed;
     }
 
+    // 诊断：把音箱被指向的 host 落日志，配合后端是否出现 /songs/{id}/play 访问行，
+    // 即可判定音箱是否真的拉到了该地址（songloft-org/songloft#405）。仅 host 基址，不含 token。
+    if (!options?.baseUrl) {
+      songloft.log.info('[URLBuilder] speaker play host=' + serverHost + ' loopback=' + isLoopbackUrl(url) + ' songId=' + (song.id ?? ''));
+    }
+
     // 回环告警只对「给音箱用的地址」有意义；显式覆盖成本机地址时（插件自己发请求）回环是正常的。
     if (!options?.baseUrl && isLoopbackUrl(url)) {
       songloft.log.warn('[URLBuilder] 播放 URL 包含回环地址，MIoT 音箱无法访问。请在插件配置中设置正确的局域网地址（如 http://192.168.x.x:58091）');
