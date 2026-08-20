@@ -1,4 +1,5 @@
 import type { Song } from './types';
+import { hostPathPrefix } from './api';
 
 const MAX_CONCURRENT_COVERS = 3;
 
@@ -34,8 +35,11 @@ export function songCoverUrl(song: Song | null | undefined, width: number): stri
     } catch {
       return '';
     }
-  } else if (!url.startsWith('/')) {
-    url = `/${url}`;
+  } else {
+    if (!url.startsWith('/')) url = `/${url}`;
+    // 反代 BASE_PATH 子路径部署下，绝对路径会绕过 BASE_PATH 直接打到域名根
+    // （songloft-org/songloft#407），补上从当前页面路径推出的 BASE_PATH 前缀。
+    url = `${hostPathPrefix()}${url}`;
   }
 
   url = appendQuery(url, 'w', String(Math.max(1, Math.round(width))));
