@@ -111,6 +111,7 @@ export class PlaylistManager {
   private _lastLoadNotFound: boolean = false; // 上次 loadPlaylistSongs 失败是否因歌单不存在(ID 过期)
   private hardStopped: boolean = false; // 上次暂停被设备忽略而升级为 stop：设备端已无媒体上下文，续播需重推 URL
   private pausedPositionSec: number = 0; // 暂停瞬间的曲内位置，硬停后据此重推带 seek 的 URL 续播
+  private transitionOffset: number = 0;  // 当前歌曲的 song_transition_offset（playCurrent 时缓存，负值=提前切歌）
   // 当前推给设备的流从歌曲第几秒开始。带 seek 的流对音箱是「从 0 开始的新流」，
   // 它上报的 position 只是流内偏移；加上本值才是曲内绝对位置（消费点见 handlers/playlist.ts）。
   private streamSeekOffsetSec: number = 0;
@@ -364,6 +365,7 @@ export class PlaylistManager {
     this.playStartTimeMs = 0;
     this.pausedPositionSec = 0;
     this.streamSeekOffsetSec = 0;
+    this.transitionOffset = 0;
 
     await this.forEachTarget('stop', t => this.minaService.stopPlay(t.account_id, t.device_id));
 
@@ -601,7 +603,7 @@ export class PlaylistManager {
       // 歌曲自然播完时 onSongFinished 不触发，音箱循环重拉同一 URL，表现为「单曲循环、不推进列表」
       // (songloft-org/songloft#404)。与 resetAutoNextTimer 同源：按 1/speed 反向缩放锚点。
       this.playStartTimeMs = Date.now() - (resumeFromSec / this.playbackSpeed) * 1000;
-      const remaining = song.duration - resumeFromSec;
+      const remaining = song.duration + this.transitionOffset - resumeFromSec;
       if (remaining > 0) {
         this.startCheckTimer(remaining / this.playbackSpeed);
         songloft.log.info(`[PlaylistManager] Timer reset after resume: remaining=${remaining.toFixed(1)}s position=${resumeFromSec.toFixed(1)}s`);
@@ -731,6 +733,7 @@ export class PlaylistManager {
    * @param devicePositionSec - 设备实际播放位置（秒），优先使用；未提供时回退到挂钟时间
    */
   resetAutoNextTimer(devicePositionSec?: number): void {
+    if (this.state !== 'playing') return;
     this.stopCheckTimer();
     this.clearVoiceSuspend();
     const song = this.getCurrentSong();
@@ -741,10 +744,10 @@ export class PlaylistManager {
       // devicePositionSec 是曲内绝对位置（调用方已把设备流内偏移按 speed 换算好）。
       // 锚点要按 1/speed 反向缩放：倍速下 playStartTimeMs 到 now 的墙钟差 × speed 才等于曲内位置。
       this.playStartTimeMs = Date.now() - (devicePositionSec / this.playbackSpeed) * 1000;
-      remaining = song.duration - devicePositionSec;
+      remaining = song.duration + this.transitionOffset - devicePositionSec;
     } else if (this.playStartTimeMs > 0) {
       const elapsedSec = ((Date.now() - this.playStartTimeMs) / 1000) * this.playbackSpeed;
-      remaining = song.duration - elapsedSec;
+      remaining = song.duration + this.transitionOffset - elapsedSec;
     } else {
       return;
     }
@@ -1000,6 +1003,7 @@ export class PlaylistManager {
     // adjustedDuration 是曲内剩余秒数，定时器按墙钟等：倍速下曲内 N 秒只需 N/speed 墙钟秒。
     if (song.duration > 0) {
       const offset = config.song_transition_offset || 0;
+      this.transitionOffset = offset;
       const adjustedDuration = Math.max(1, song.duration + offset - seekSeconds);
       this.startCheckTimer(adjustedDuration / effectiveSpeed);
     } else {
