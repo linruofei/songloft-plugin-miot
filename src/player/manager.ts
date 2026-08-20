@@ -16,6 +16,20 @@ function allocTempPlaylistId(): number {
   return nextTempPlaylistId--;
 }
 
+/**
+ * 外部停止探测参数（songloft-org/songloft#408）。
+ * 自动切歌定时器纯按 wall-clock 驱动，对"设备被外部真正停止"（如语音"关机"未被
+ * ConversationMonitor 捕获、且网页/App 已关闭没有轮询校准）完全不知情，到期会无条件
+ * 给设备推下一首，表现为"关机后隔一段时间又自动播放"。
+ */
+/** 探测间隔：歌曲播放期间每隔这么久查一次设备真实播放状态 */
+const EXTERNAL_STOP_POLL_INTERVAL_MS = 20000;
+/** 距歌曲自然结束前这段时间内停止探测：设备放完最后一段本身也会短暂上报 stopped/idle，
+ * 与"被外部真的停止"无法区分（同类风险见 handlers/playlist.ts syncManagerFromDeviceState 注释） */
+const EXTERNAL_STOP_TAIL_GUARD_SEC = 15;
+/** 连续命中"未在播放"多少次才判定为真实外部停止，抵御小爱偶发误报（单次误报会被下一轮探测纠正） */
+const EXTERNAL_STOP_CONFIRM_COUNT = 2;
+
 /** 判断 playlistId 是否为临时歌单 */
 export function isTempPlaylistId(id: number): boolean {
   return id < 0;
@@ -94,6 +108,8 @@ export class PlaylistManager {
   private songs: Song[] = [];
   private currentIndex: number = 0;
   private checkTimer: any = null;       // 定时器ID（基于歌曲时长的切歌定时器）
+  private stopPollTimer: any = null;    // 定时器ID（后台探测外部停止，见 EXTERNAL_STOP_* 常量）
+  private stopPollMisses: number = 0;   // 连续探测到设备"未在播放"的次数
   private totalSongs: number = 0;
   private playStartTimeMs: number = 0;  // 当前歌曲开始播放的时间戳(ms)
   private randomPlayed: Set<number> = new Set(); // 随机模式已播放索引
@@ -1213,6 +1229,66 @@ export class PlaylistManager {
         songloft.log.error('[PlaylistManager] onSongFinished error: ' + String(e));
       });
     }, delayMs);
+
+    // 剩余时长明显长于「探测间隔 + 尾部盲区」才启动外部停止探测，
+    // 避开临近自然结束时的状态歧义（songloft-org/songloft#408）
+    const pollBudgetMs = delayMs - EXTERNAL_STOP_TAIL_GUARD_SEC * 1000;
+    if (pollBudgetMs >= EXTERNAL_STOP_POLL_INTERVAL_MS) {
+      this.stopPollMisses = 0;
+      this.scheduleStopPoll(pollBudgetMs);
+    }
+  }
+
+  /**
+   * 安排下一次外部停止探测。每次重新校准自动切歌定时器（resetAutoNextTimer / 续播等）
+   * 都会经 startCheckTimer 重走这里，探测计划随之刷新，与切歌定时器保持同源。
+   */
+  private scheduleStopPoll(remainingBudgetMs: number): void {
+    const wait = Math.min(EXTERNAL_STOP_POLL_INTERVAL_MS, remainingBudgetMs);
+    this.stopPollTimer = setTimeout(() => {
+      this.stopPollTimer = null;
+      this.checkExternalStop(remainingBudgetMs - wait).catch(e => {
+        songloft.log.warn('[PlaylistManager] checkExternalStop error: ' + String(e));
+      });
+    }, wait);
+  }
+
+  /**
+   * 查询设备真实播放状态，捕获自动切歌定时器无法感知的外部停止
+   * （如语音"关机"未被 ConversationMonitor 捕获、且网页/App 已关闭没有客户端轮询校准）。
+   *
+   * 小爱在 URL/MUSIC 模式下会偶发把正常播放误报成 stopped/paused（同类风险见
+   * handlers/playlist.ts 的 syncManagerFromDeviceState 注释），因此不能凭单次探测下结论：
+   * 连续 EXTERNAL_STOP_CONFIRM_COUNT 次（每次间隔 EXTERNAL_STOP_POLL_INTERVAL_MS）都确认
+   * 未在播放才停止，单次误报会被下一轮探测自动纠正。
+   */
+  private async checkExternalStop(remainingBudgetMs: number): Promise<void> {
+    if (this.state !== 'playing') return;
+    const indexAtCheck = this.currentIndex;
+
+    try {
+      const { status } = await this.minaService.getPlayState(this.accountId, this.deviceId);
+      // 探测期间状态已变化（暂停/停止/切歌）：交给触发那次操作的逻辑处理，这里不再插手
+      if (this.state !== 'playing' || this.currentIndex !== indexAtCheck) return;
+
+      if (status === 1) {
+        this.stopPollMisses = 0;
+      } else if (status >= 0) {
+        this.stopPollMisses++;
+        if (this.stopPollMisses >= EXTERNAL_STOP_CONFIRM_COUNT) {
+          songloft.log.info(`[PlaylistManager] External stop confirmed (status=${status}, misses=${this.stopPollMisses}), cancelling auto-next`);
+          await this.stop();
+          return;
+        }
+      }
+      // status < 0（查询失败/网络抖动）：不计入未命中，避免网络问题误判为外部停止
+    } catch (e) {
+      songloft.log.warn('[PlaylistManager] checkExternalStop query failed: ' + String(e));
+    }
+
+    if (this.state === 'playing' && this.currentIndex === indexAtCheck && remainingBudgetMs > 0) {
+      this.scheduleStopPoll(remainingBudgetMs);
+    }
   }
 
   /**
@@ -1223,6 +1299,11 @@ export class PlaylistManager {
       clearTimeout(this.checkTimer);
       this.checkTimer = null;
     }
+    if (this.stopPollTimer !== null) {
+      clearTimeout(this.stopPollTimer);
+      this.stopPollTimer = null;
+    }
+    this.stopPollMisses = 0;
   }
 
   /**
