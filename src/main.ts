@@ -39,20 +39,26 @@ const router = createRouter();
 // server_host 失效自检：它是静态手动值，服务器换 IP（DHCP）/重启后不会自动刷新。
 // 若非回环却不在本机当前网卡地址中，音箱将被指向拉不到的旧地址 → 无声（songloft-org/songloft#405）。
 async function warnIfServerHostStale(serverHost: string): Promise<void> {
-  const host = (serverHost || '').trim().toLowerCase();
-  if (!host) return;
-  // 回环由设置页 status 单独提示，这里只查「失效但非回环」的旧地址
-  if (host.startsWith('http://localhost') || host.startsWith('http://127.')) return;
-  let localAddrs: string[] = [];
   try {
-    localAddrs = await songloft.plugin.getNetworkAddresses();
+    const host = (serverHost || '').trim().toLowerCase();
+    if (!host) return;
+    // 回环由设置页 status 单独提示，这里只查「失效但非回环」的旧地址
+    if (host.startsWith('http://localhost') || host.startsWith('http://127.')) return;
+
+    const localAddrs = await songloft.plugin.getNetworkAddresses();
+    // Older hosts and Docker-only network namespaces may return null when no
+    // non-Docker interface is available. This diagnostic must never block init.
+    if (!Array.isArray(localAddrs)) {
+      songloft.log.warn('[URLBuilder] server_host 失效自检跳过（本机没有可用网卡地址）');
+      return;
+    }
+    const validAddrs = localAddrs.filter((addr): addr is string => typeof addr === 'string');
+    const norm = (s: string) => s.trim().toLowerCase().replace(/\/$/, '');
+    if (!validAddrs.some(a => norm(a) === norm(host))) {
+      songloft.log.warn('[URLBuilder] server_host=' + serverHost + ' 不在当前本机网卡地址中（' + validAddrs.join(', ') + '）；服务器可能已更换 IP 或音箱不在同一网段，音箱将无法访问，请在设置页重新选择地址');
+    }
   } catch (e) {
     songloft.log.warn('[URLBuilder] server_host 失效自检失败（无法获取本机网卡地址）: ' + String(e));
-    return;
-  }
-  const norm = (s: string) => s.trim().toLowerCase().replace(/\/$/, '');
-  if (!localAddrs.some(a => norm(a) === norm(host))) {
-    songloft.log.warn('[URLBuilder] server_host=' + serverHost + ' 不在当前本机网卡地址中（' + localAddrs.join(', ') + '）；服务器可能已更换 IP 或音箱不在同一网段，音箱将无法访问，请在设置页重新选择地址');
   }
 }
 
