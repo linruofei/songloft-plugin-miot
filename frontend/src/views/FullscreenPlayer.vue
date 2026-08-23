@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
-import { songCoverUrl } from '../covers';
+import { useSongCover } from '../covers';
 import PlayerModePopup from './PlayerModePopup.vue';
 import PlayerSpeedPopup from './PlayerSpeedPopup.vue';
 import PlayerProgress from './PlayerProgress.vue';
@@ -8,7 +8,7 @@ import PlayerSleepTimerPopup from './PlayerSleepTimerPopup.vue';
 import PlayerVolumePopup from './PlayerVolumePopup.vue';
 import SlButton from '../ui/SlButton.vue';
 import SlIcon from '../ui/SlIcon.vue';
-import { closePage, navigation } from '../runtime';
+import { closePage, navigation, notifyHostFavorite } from '../runtime';
 import { get, messageOf, post, query } from '../api';
 import type { SleepTimerStatus } from '../types';
 import { notify, playerCommand, seekPlayer, setPlayMode, setPlaybackSpeed, setVolume, state } from '../store';
@@ -20,7 +20,6 @@ const isFavorite = ref(false);
 const favoriteBusy = ref(false);
 const sleepTimerBusy = ref(false);
 const sleepTimer = ref<SleepTimerStatus>({ active: false, mode: 'time', remaining: 0, total: 0 });
-const coverFailed = ref(false);
 const mobilePager = ref<HTMLElement | null>(null);
 const mobilePage = ref(0);
 const desktopLyrics = ref<HTMLElement | null>(null);
@@ -36,7 +35,15 @@ const activeLyric = computed(() => {
   lyrics.value.forEach((line, i) => { if (line.time <= position) index = i; });
   return index;
 });
-const cover = computed(() => coverFailed.value ? '' : songCoverUrl(state.player.current_song, 768));
+// 桌面与移动 stage **同时**在 DOM 里（只靠媒体查询 `display:none` 切换），所以这里
+// 刻意开两份、并用不同的 `w=`：
+//   ① 尺寸本来就不同（桌面 frame 360px、移动 72vw/max 320px），各取 2x 更合理；
+//   ② 更要紧的是别让两个 `<img>` 落到同一个 URL 上 —— WebF 的 `_loadNormalImage`
+//      会 `evict(BoxFitImageKey(url, ImageConfiguration.empty), includeLive: true)`
+//      紧接着又用同一个 key 去 resolve，同 URL 的两个 img 会互相把对方（连同已解码的
+//      `ui.Image`）毙掉，表现是空白且**不发 error 事件**（#86 的可疑主因之一）。
+const { src: cover, onError: onCoverError, onLoad: onCoverLoad } = useSongCover(() => state.player.current_song, 768);
+const { src: coverMobile, onError: onCoverMobileError, onLoad: onCoverMobileLoad } = useSongCover(() => state.player.current_song, 640);
 
 function parseLrc(text: string): LyricLine[] {
   const output: LyricLine[] = [];
@@ -101,7 +108,7 @@ async function toggleFavorite(): Promise<void> {
     });
     isFavorite.value = result.is_favorited;
     notify(result.is_favorited ? '已收藏' : '已取消收藏', 'success', 1800);
-    window.SongloftPlugin?.invokeHost?.('favorite', 'refresh', { songId: id, isFavorited: result.is_favorited }).catch(() => {});
+    notifyHostFavorite(id, result.is_favorited);
   } catch (error) {
     isFavorite.value = previous;
     notify(messageOf(error), 'error');
@@ -230,27 +237,13 @@ async function centerActiveLyric(): Promise<void> {
   }
 }
 
-function onVisibilityChange(): void {
-  if (document.visibilityState === 'visible' || !document.hidden) {
-    coverFailed.value = false;
-  }
-}
-
 onMounted(() => {
   void loadSongDetails();
   void loadSleepTimer();
-  document.addEventListener('visibilitychange', onVisibilityChange);
 });
-onUnmounted(() => {
-  window.clearTimeout(mobileScrollTimer);
-  document.removeEventListener('visibilitychange', onVisibilityChange);
-});
+onUnmounted(() => window.clearTimeout(mobileScrollTimer));
 watch(() => state.player.current_song?.id, loadSongDetails);
 watch(() => [state.currentAccountId, state.currentDeviceId], loadSleepTimer);
-watch(
-  () => [state.player.current_song?.id, state.player.current_song?.cover_url],
-  () => { coverFailed.value = false; },
-);
 watch(activeLyric, centerActiveLyric);
 </script>
 
@@ -265,7 +258,7 @@ watch(activeLyric, centerActiveLyric);
           <div class="fullscreen-desktop-stage">
             <section class="fullscreen-cover-column" aria-label="当前歌曲">
               <div class="fullscreen-cover-frame">
-                <img v-if="cover" class="fullscreen-cover" :src="cover" :alt="state.player.current_song?.title || '歌曲封面'" @error="coverFailed = true" />
+                <img v-if="cover" class="fullscreen-cover" :src="cover" :alt="state.player.current_song?.title || '歌曲封面'" @error="onCoverError" @load="onCoverLoad" />
                 <div v-else class="fullscreen-cover player-cover-empty"><SlIcon name="music_note" :size="44" player-icon /></div>
               </div>
               <div class="fullscreen-song-meta fullscreen-song-meta-desktop">
@@ -291,7 +284,7 @@ watch(activeLyric, centerActiveLyric);
             >
               <section class="fullscreen-mobile-slide" aria-label="歌曲封面">
                 <div class="fullscreen-cover-frame">
-                  <img v-if="cover" class="fullscreen-cover" :src="cover" :alt="state.player.current_song?.title || '歌曲封面'" @error="coverFailed = true" />
+                  <img v-if="coverMobile" class="fullscreen-cover" :src="coverMobile" :alt="state.player.current_song?.title || '歌曲封面'" @error="onCoverMobileError" @load="onCoverMobileLoad" />
                   <div v-else class="fullscreen-cover player-cover-empty"><SlIcon name="music_note" :size="44" player-icon /></div>
                 </div>
               </section>

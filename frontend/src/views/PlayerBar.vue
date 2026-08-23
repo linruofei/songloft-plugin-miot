@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
-import { songCoverUrl } from '../covers';
-import { openPage } from '../runtime';
+import { useSongCover } from '../covers';
+import { notifyHostFavorite, openPage } from '../runtime';
 import { currentDevice, notify, playerCommand, seekPlayer, setPlayMode, setVolume, state } from '../store';
 import { get, messageOf, post, query } from '../api';
 import type { SleepTimerStatus } from '../types';
@@ -31,12 +31,11 @@ function onProgressClick(event: MouseEvent): void {
   seekPlayer(position);
 }
 
-const coverFailed = ref(false);
 const isFavorite = ref(false);
 const favoriteBusy = ref(false);
 const sleepTimerBusy = ref(false);
 const sleepTimer = ref<SleepTimerStatus>({ active: false, mode: 'time', remaining: 0, total: 0 });
-const cover = computed(() => coverFailed.value ? '' : songCoverUrl(state.player.current_song, 96));
+const { src: cover, onError: onCoverError, onLoad: onCoverLoad } = useSongCover(() => state.player.current_song, 96);
 
 const formattedPosition = computed(() => formatTime(Number(state.player.position || 0)));
 const formattedDuration = computed(() => formatTime(Number(state.player.duration || 0)));
@@ -47,29 +46,14 @@ function formatTime(seconds: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-watch(
-  () => [state.player.current_song?.id, state.player.current_song?.cover_url],
-  () => { coverFailed.value = false; },
-);
-
 watch(() => state.player.current_song?.id, loadFavoriteStatus);
 watch(() => [state.currentAccountId, state.currentDeviceId], loadSleepTimer);
-
-function onVisibilityChange(): void {
-  if (document.visibilityState === 'visible' || !document.hidden) {
-    coverFailed.value = false;
-  }
-}
 
 onMounted(() => {
   void loadFavoriteStatus();
   void loadSleepTimer();
-  document.addEventListener('visibilitychange', onVisibilityChange);
 });
-onUnmounted(() => {
-  window.removeEventListener('resize', onResize);
-  document.removeEventListener('visibilitychange', onVisibilityChange);
-});
+onUnmounted(() => window.removeEventListener('resize', onResize));
 
 function openPlayer(): void {
   openPage('player');
@@ -100,7 +84,7 @@ async function toggleFavorite(): Promise<void> {
     });
     isFavorite.value = result.is_favorited;
     notify(result.is_favorited ? '已收藏' : '已取消收藏', 'success', 1800);
-    window.SongloftPlugin?.invokeHost?.('favorite', 'refresh', { songId: id, isFavorited: result.is_favorited }).catch(() => {});
+    notifyHostFavorite(id, result.is_favorited);
   } catch (error) {
     isFavorite.value = previous;
     notify(messageOf(error), 'error');
@@ -172,7 +156,7 @@ async function cancelSleepTimer(): Promise<void> {
       <!-- 左侧：歌曲信息 + 收藏按钮 -->
       <div class="player-bar-left">
         <div class="player-bar-info" role="button" tabindex="0" aria-label="展开播放器" @click="openPlayer" @keydown.enter="openPlayer">
-          <img v-if="cover" class="player-cover" :src="cover" :alt="state.player.current_song?.title || '歌曲封面'" @error="coverFailed = true" />
+          <img v-if="cover" class="player-cover" :src="cover" :alt="state.player.current_song?.title || '歌曲封面'" @error="onCoverError" @load="onCoverLoad" />
           <div v-else class="player-cover player-cover-empty"><SlIcon name="music_note" :size="22" player-icon /></div>
           <div class="player-copy">
             <span class="player-title">{{ state.player.current_song?.title || '暂无播放' }}</span>

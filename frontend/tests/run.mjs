@@ -145,10 +145,63 @@ assert.match(songRow, /class="song-cover-img"/);
 assert.match(songRow, /acquireCoverSlot/);
 assert.match(covers, /access_token/);
 assert.match(covers, /MAX_CONCURRENT_COVERS = 3/);
-assert.match(playerBar, /songCoverUrl\(state\.player\.current_song, 96\)/);
-assert.match(fullscreenPlayer, /songCoverUrl\(state\.player\.current_song, 768\)/);
-assert.match(playerBar, /@error="coverFailed = true"/);
-assert.match(fullscreenPlayer, /@error="coverFailed = true"/);
+assert.match(playerBar, /useSongCover\(\(\) => state\.player\.current_song, 96\)/);
+assert.match(fullscreenPlayer, /useSongCover\(\(\) => state\.player\.current_song, 768\)/);
+assert.match(playerBar, /@error="onCoverError"/);
+assert.match(fullscreenPlayer, /@error="onCoverError"/);
+
+// #86 回归测试（第 1 条「切标签回来封面永久丢失」）。
+// 上一次修的方式是「监听 visibilitychange 把 coverFailed 置回 false」，两处都不成立：
+//   ① WebF 只在 App 级前后台切换时派发 visibilitychange，Tab 切换在 JS 侧完全不可见，
+//      所以那个 handler 是死代码（现已由客户端的 setPageVisible 补上真通知）；
+//   ② 光清标记不够 —— WebF 可能画着一个已 dispose 的 ui.Image（空白且**不发 error**），
+//      src 不变就不会重新解码。必须换掉 URL 才能触发 set src → 新 provider → 重新解码。
+assert.match(covers, /export function useSongCover/);
+// 换 URL 的 nonce：这是与上一版修复的本质区别，不能退回成只清标记。
+assert.match(covers, /appendQuery\(url, '_r', String\(nonce\.value\)\)/);
+assert.match(covers, /nonce\.value \+= 1/);
+// 失败标记不能是粘滞闩锁：WebF 的 _onImageError 重试成功也照样派发 error，
+// 一次瞬时失败不该让这首歌整个会话都没封面。重试次数要有上限，真 404 不能无限重试。
+assert.match(covers, /MAX_COVER_RETRIES = \d+/);
+assert.match(covers, /retries >= MAX_COVER_RETRIES/);
+// 加载成功要把重试预算还回去：插件 Tab 靠 Offstage 保活，同一个组件实例可能活几小时，
+// 预算必须是「每段连续失败」而不是「每首歌」，否则偶发失败两次就再也不重试了。
+assert.match(covers, /function onLoad\(\): void \{\s*retries = 0;/);
+assert.match(playerBar, /@load="onCoverLoad"/);
+assert.match(fullscreenPlayer, /@load="onCoverLoad"/);
+assert.match(fullscreenPlayer, /@load="onCoverMobileLoad"/);
+// 放弃重试时必须撤掉还在飞的定时器：否则它会在 1.2s 后把已经放弃的图又复活一次
+// （浏览器实测复现过，那条 `真 404 不无限重试` 的保证会被这颗定时器绕过）。
+assert.match(covers, /if \(retries >= MAX_COVER_RETRIES\) \{[\s\S]{0,400}?clearRetryTimer\(\);\s*failed\.value = true;/);
+assert.match(covers, /addEventListener\('visibilitychange'/);
+assert.match(covers, /removeEventListener\('visibilitychange'/);
+// 全屏页桌面/移动两个 stage 同时在 DOM 里，必须用不同的 w=：同 URL 的两个 <img> 会
+// 因 WebF 的 evict(..., includeLive: true) 互相把对方已解码的图毙掉。
+assert.match(fullscreenPlayer, /useSongCover\(\(\) => state\.player\.current_song, 640\)/);
+assert.match(fullscreenPlayer, /@error="onCoverMobileError"/);
+
+// #86 回归测试（第 2 条「miot 收藏后曲库红心不同步」）。
+// 必须走 `SongloftPlugin.favorite.refresh`。上一版写的是 `SongloftPlugin.invokeHost`，
+// 而 invokeHost 当时只挂在内部句柄 window.__SongloftInternal、公开对象里并没有，
+// 于是可选调用把它静默吞掉、一个字节都没发出去。
+assert.match(runtime, /export function notifyHostFavorite/);
+assert.match(runtime, /SongloftPlugin\?\.favorite\?\.refresh\?\./);
+assert.match(playerBar, /notifyHostFavorite\(id, result\.is_favorited\)/);
+assert.match(fullscreenPlayer, /notifyHostFavorite\(id, result\.is_favorited\)/);
+// env.d.ts 是手写的宿主 API 声明，必须与 common.js 的公开字面量一致。
+// 声明一个宿主并不提供的方法，等于让 TS 替一段死代码背书 —— 这就是上面那次静默失败的成因。
+// 只禁「声明」，不禁注释里提它——那段注释正是记录这次踩坑的。
+const envTypes = fs.readFileSync(path.join(frontendRoot, 'env.d.ts'), 'utf8');
+assert.doesNotMatch(envTypes, /^\s*invokeHost\?\(/m);
+assert.match(envTypes, /favorite\?: \{/);
+
+// #86 第 4 条（「搜索框的 x 在框外」）**刻意没有对应断言**：用 WebF 探针在 370px 与
+// 1280px 两个宽度下量过真实产物 CSS，原生输入框直接做 flex item 时 `flex: 1` 是生效的
+// （输入框恰好占满剩余空间，两个按钮的右边界都落在 padding 内，overflow_px=0），
+// 这条 bug 复现不出来。反而「包一层 div 承担 flex」会让 WebF 把输入框的 `width: 100%`
+// 按包装层的**声明宽度**而非 flex 后的实际宽度解析，输入框反而变窄——所以不要那么改。
+// 复现步骤见 songloft-org/songloft-plugin-miot#86。
+assert.match(style, /\.search-bar input, \.search-bar \.sl-input-native\s*\{[^}]*flex: 1/);
 assert.match(voiceSettings, /class="command-keywords"/);
 assert.match(voiceSettings, /addKeyword\(command, index\)/);
 assert.match(voiceSettings, /removeKeyword\(command, index, keywordIndex\)/);
