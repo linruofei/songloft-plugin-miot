@@ -83,9 +83,52 @@ assert.doesNotMatch(style, /\.sl-select-panel \{[^}]*overflow(-y)?: (auto|scroll
 assert.match(style, /\.sl-select-panel \{[^}]*overflow: hidden/);
 assert.match(style, /\.sl-select-panel-scroll \{[^}]*overflow-y: auto/);
 assert.match(selectComponent, /class="sl-select-panel-scroll"/);
-assert.match(selectComponent, /scrollStyle\.value = \{ maxHeight: `\$\{Math\.round\(height\) - 2\}px` \}/);
+assert.match(selectComponent, /scrollStyle\.value = \{ maxHeight: `\$\{Math\.round\(height\) - PANEL_BORDER - searchH\}px` \}/);
 assert.doesNotMatch(selectComponent, /maxHeight: `\$\{Math\.round\(height\)\}px`/);
 assert.match(selectComponent, /if \(target && panel\.value\?\.contains\(target\)\) return;/);
+// 歌单搜索（songloft-org/songloft#410）：WebF 重构时把旧版带搜索框的歌单弹层换成了
+// 通用 SlSelect，过滤功能整个丢了。搜索行在滚动容器外，所以面板总高与内层 maxHeight
+// 都必须给它让位；SEARCH_ROW_H 与 CSS 的 height 要对齐，否则面板会算矮一行。
+assert.match(selectComponent, /searchable\?: boolean/);
+// searchable 的下拉在浏览器里也要走自绘面板：原生 <select> 塞不进搜索框，只修 WebF
+// 分支会把回归留一半在 Web 端（旧版原生前端在浏览器里是有搜索框的）。
+// 条件必须是 searchable 而非 showSearch，否则选项数跨过阈值时渲染分支会来回跳。
+assert.match(selectComponent, /v-if="isWebFRuntime \|\| searchable"/);
+assert.doesNotMatch(selectComponent, /v-if="isWebFRuntime"/);
+assert.match(selectComponent, /const SEARCH_MIN_OPTIONS = 5/);
+assert.match(selectComponent, /props\.searchable && props\.options\.length > SEARCH_MIN_OPTIONS/);
+assert.match(selectComponent, /const SEARCH_ROW_H = 48/);
+assert.match(style, /\.sl-select-panel-search \{[^}]*height: 48px/);
+assert.match(selectComponent, /const searchH = showSearch\.value \? SEARCH_ROW_H : 0/);
+// 面板外高必须把「滚动容器 padding + 面板边框」都算进去，内层 maxHeight 再减回边框。
+// 少算边框 2px 时哪怕只有 1 项，maxHeight 也会比内容小 2px、溢出出滚动条
+// （小屏 itemH=40 必现）—— 这正是「只有 1 首也出滚动条」的根因。
+assert.match(selectComponent, /const PANEL_BORDER = 2/);
+assert.match(selectComponent, /const SCROLL_PAD = 8/);
+assert.match(selectComponent, /rows\.value\.length \* itemH \+ SCROLL_PAD\) \+ searchH \+ PANEL_BORDER/);
+assert.match(selectComponent, /itemH \* MIN_ROWS_BELOW \+ SCROLL_PAD \+ searchH \+ PANEL_BORDER/);
+// 面板高度的下界也要含搜索行：否则空间被挤到极小时 height 被钳到 itemH，
+// 内层 maxHeight 变负、max-height 声明失效，选项会被 overflow:hidden 吃掉
+assert.match(selectComponent, /Math\.max\(itemH \+ searchH, Math\.min\(desiredH/);
+// 匹配 searchText 优先于 label：歌单 label 带「(歌曲数)」，拿它匹配会让输入数字命中一片。
+// `||` 必须转义 —— 正则里裸写 || 是「空或空」的交替，能匹配任何字符串，断言会变永真。
+assert.match(selectComponent, /\(option\.searchText \|\| option\.label\)\.toLowerCase\(\)\.includes\(keyword\.value\)/);
+// 打开与选中都要复位关键词，否则下次打开列表已被上次的词过滤、而搜索框是空的
+assert.match(selectComponent, /query\.value = '';\n  openSelect\.value = id;/);
+// 刻意不 autofocus：打开下拉即调起输入法会把面板压到不便选择（旧版 playlist.js 同样权衡）。
+// 只禁真正的属性/调用，别把说明这件事的注释也一起禁掉。
+assert.doesNotMatch(selectComponent, /\.focus\(\)|autofocus(=|\s*\/?>)/);
+// 过滤后行数变了要重定位，否则向上展开的面板与触发器之间会裂开空隙
+assert.match(selectComponent, /watch\(keyword, \(\) => \{/);
+assert.match(selectComponent, /sl-select-empty/);
+// 三处歌单/歌曲下拉都要接上，且歌单要传纯名称做匹配文本
+assert.match(mainPage, /searchable search-placeholder="搜索歌单"/);
+assert.match(mainPage, /searchText: p\.name/);
+assert.match(scheduleSettings, /searchText: playlist\.name/);
+assert.match(scheduleSettings, /v-model="playlistId"[^>]*searchable search-placeholder="搜索歌单"/);
+assert.match(scheduleSettings, /v-model="songId"[^>]*searchable search-placeholder="搜索歌曲"/);
+assert.match(voiceSettings, /searchText: p\.name/);
+assert.match(voiceSettings, /external_search_playlist_id"[^>]*searchable search-placeholder="搜索歌单"/);
 assert.match(mainPage, /openSelect\.value = null/);
 assert.match(mainPage, /@click="openDevicePicker"/);
 assert.match(style, /\.sl-select-wrap-open\s*\{\s*z-index: 80/);

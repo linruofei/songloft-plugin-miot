@@ -17,7 +17,7 @@ import type { SelectOption, Song } from '../types';
 const search = ref('');
 const songRenderLimit = ref(20);
 const songRenderBatchSize = 40;
-const playlistOptions = computed<SelectOption[]>(() => state.playlists.map((p) => ({ value: String(p.id), label: playlistLabel(p) })));
+const playlistOptions = computed<SelectOption[]>(() => state.playlists.map((p) => ({ value: String(p.id), label: playlistLabel(p), searchText: p.name })));
 const renderedSongs = computed(() => visibleSongs.value.slice(0, songRenderLimit.value));
 const noServerHint = computed(() => !state.config.server_host || state.config.server_host_status === 'loopback');
 const listMeasureRetries = 6;
@@ -30,7 +30,19 @@ function measureListHeight(attempt = 0): void {
   const list = document.querySelector<HTMLElement>('.sl-list-view');
   const player = document.querySelector<HTMLElement>('.player-bar-shell');
   const listTop = list?.getBoundingClientRect().top || 0;
-  const listBottom = player?.getBoundingClientRect().top || window.innerHeight - 16;
+  // 有播放条：列表填到播放条顶（它 fixed 在底部，`.miot-page-with-player` 已把
+  // padding-bottom 归零）。无播放条：列表只能填到「视口底 − .miot-page 的
+  // padding-bottom」—— 这段内边距是给 fixed 播放条预留的、无条件存在（移动端 90px）。
+  // 旧写法恒用 innerHeight - 16 没算它，列表越过内容区底端把页面撑出约 74px，
+  // 哪怕只有 1 首歌页面也出滚动条（songloft-org/songloft#410 后续报告）。
+  let listBottom: number;
+  if (player) {
+    listBottom = player.getBoundingClientRect().top;
+  } else {
+    const page = list?.closest('.miot-page');
+    const padBottom = page ? parseFloat(getComputedStyle(page).paddingBottom) || 0 : 0;
+    listBottom = window.innerHeight - padBottom;
+  }
   if (list && listTop > 0 && listBottom > listTop) {
     list.style.height = `${Math.max(128, Math.round(listBottom - listTop))}px`;
     return;
@@ -125,7 +137,7 @@ onUnmounted(() => {
 
     <div class="player-toolbar">
       <div class="toolbar-field">
-        <SlSelect :model-value="state.selectedPlaylistId" :options="playlistOptions" placeholder="选择歌单" allow-empty aria-label="选择歌单" @update:model-value="onPlaylist" />
+        <SlSelect :model-value="state.selectedPlaylistId" :options="playlistOptions" placeholder="选择歌单" allow-empty searchable search-placeholder="搜索歌单" aria-label="选择歌单" @update:model-value="onPlaylist" />
       </div>
     </div>
 

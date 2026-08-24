@@ -87,7 +87,7 @@ const searchPriorityOptions: SelectOption[] = [
 
 const appendPlaylistEnabled = computed(() => !!state.config.external_search_playlist_id);
 const playlistOptions = computed<SelectOption[]>(() =>
-  state.playlists.map((p) => ({ value: String(p.id), label: playlistLabel(p) })),
+  state.playlists.map((p) => ({ value: String(p.id), label: playlistLabel(p), searchText: p.name })),
 );
 
 function setAppendPlaylistEnabled(enabled: boolean): void {
@@ -664,7 +664,7 @@ async function deleteMemoryRecord(id?: string): Promise<void> {
     <div class="form-body">
       <div class="field"><label class="field-label">搜索优先级</label><SlSelect :model-value="state.config.search_priority" :options="searchPriorityOptions" aria-label="搜索优先级" @update:model-value="saveConfig({ search_priority: $event as 'parallel' | 'local_first' | 'external_first' })" /></div>
       <div class="field-grid"><div class="field"><label class="field-label">超时（秒）</label><SlInput :model-value="externalSearchTimeout" type="number" aria-label="外部搜索超时" @update:model-value="externalSearchTimeout = $event" @change="saveConfig({ external_search_timeout: Math.max(3, Math.min(60, Number(externalSearchTimeout) || 6)) })" /></div><div class="field setting-field-control"><label class="field-label">不入库直接播放</label><SlSwitch :model-value="state.config.external_search_no_import" @update:model-value="setSwitch('external_search_no_import', $event)" /></div></div>
-      <div class="field-grid"><div class="field setting-field-control"><label class="field-label">自动追加到歌单</label><SlSwitch :model-value="appendPlaylistEnabled" @update:model-value="setAppendPlaylistEnabled" /></div><div v-if="appendPlaylistEnabled" class="field"><label class="field-label">目标歌单</label><SlSelect :model-value="state.config.external_search_playlist_id" :options="playlistOptions" aria-label="目标歌单" @update:model-value="setAppendPlaylistId" /></div></div>
+      <div class="field-grid"><div class="field setting-field-control"><label class="field-label">自动追加到歌单</label><SlSwitch :model-value="appendPlaylistEnabled" @update:model-value="setAppendPlaylistEnabled" /></div><div v-if="appendPlaylistEnabled" class="field"><label class="field-label">目标歌单</label><SlSelect :model-value="state.config.external_search_playlist_id" :options="playlistOptions" searchable search-placeholder="搜索歌单" aria-label="目标歌单" @update:model-value="setAppendPlaylistId" /></div></div>
       <h3 class="card-title">已安装搜索源</h3>
       <div class="field-grid">
         <div class="field">

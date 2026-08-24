@@ -271,4 +271,12 @@ export interface LoginChallenge {
 export interface SelectOption {
   value: string;
   label: string;
+  /**
+   * `searchable` 下拉的匹配文本，缺省时回退 `label`。
+   *
+   * 歌单的 label 是 `playlistLabel()` 产出的「名称 (歌曲数)」，直接拿它匹配会让
+   * 输入 `2` 命中所有歌曲数含 2 的歌单。旧版原生前端匹配的是纯名称
+   * （`.playlist-select-item-name` 的 textContent），这里靠该字段还原。
+   */
+  searchText?: string;
 }

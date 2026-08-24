@@ -3,6 +3,8 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import type { SelectOption } from '../types';
 import { isWebFRuntime } from '../runtime';
 import SlButton from './SlButton.vue';
+import SlIcon from './SlIcon.vue';
+import SlInput from './SlInput.vue';
 import { nextSelectId, openSelect } from './selectState';
 
 const props = withDefaults(
@@ -13,8 +15,15 @@ const props = withDefaults(
     ariaLabel?: string;
     allowEmpty?: boolean;
     disabled?: boolean;
+    /**
+     * 面板顶部显示搜索框，按关键词过滤选项（songloft-org/songloft#410）。
+     * 只对 WebF 自绘面板生效；非 WebF 走原生 `<select>`，浏览器自带键入跳转。
+     */
+    searchable?: boolean;
+    /** 搜索框占位文案。`ariaLabel` 是「选择歌单」这种动宾短语，拼进去会变「搜索选择歌单」。 */
+    searchPlaceholder?: string;
   }>(),
-  { placeholder: '请选择', allowEmpty: false },
+  { placeholder: '请选择', allowEmpty: false, searchable: false, searchPlaceholder: '搜索' },
 );
 const emit = defineEmits<{ 'update:modelValue': [string] }>();
 const wrapper = ref<HTMLElement | null>(null);
@@ -28,13 +37,37 @@ const opened = computed(() => openSelect.value === id);
 const label = computed(
   () => props.options.find((option) => option.value === props.modelValue)?.label || props.placeholder,
 );
-const rows = computed(() =>
-  props.allowEmpty
-    ? [{ value: '', label: props.placeholder }, ...props.options]
+
+// 选项少到一屏能看完时，搜索框只是白占一行，在 APP 上还多一个误触输入法的入口。
+const SEARCH_MIN_OPTIONS = 5;
+const query = ref('');
+const showSearch = computed(() => props.searchable && props.options.length > SEARCH_MIN_OPTIONS);
+const keyword = computed(() => (showSearch.value ? query.value.trim().toLowerCase() : ''));
+const filtered = computed(() =>
+  keyword.value
+    ? props.options.filter((option) =>
+        // `||` 而不是 `??`：searchText 为空串时该回退到 label，否则这一项永远搜不到
+        (option.searchText || option.label).toLowerCase().includes(keyword.value),
+      )
     : props.options,
+);
+const rows = computed(() =>
+  // 搜索中不再挂占位行：用户已经在找具体某一项了，"请选择"混在结果里只会干扰。
+  props.allowEmpty && !keyword.value
+    ? [{ value: '', label: props.placeholder }, ...filtered.value]
+    : filtered.value,
 );
 
 const PANEL_MAX_H = 320;
+// 与 style.css .sl-select-panel-search 的 height 必须一致：搜索行在滚动容器**外**，
+// 面板总高和内层 maxHeight 都要按它让位。
+const SEARCH_ROW_H = 48;
+// .sl-select-panel 上下边框各 1px。desiredH 是面板**外**高，必须把边框算进去：
+// 内层 maxHeight = height - PANEL_BORDER - searchH，少算这 2px 时哪怕只有 1 项，
+// maxHeight 也会比内容需要的高度小 2px、溢出出滚动条（小屏 itemH=40 时必现）。
+const PANEL_BORDER = 2;
+// .sl-select-panel-scroll 的上下 padding 各 4px，是选项之外的固有高度。
+const SCROLL_PAD = 8;
 const PANEL_GAP = 4;
 const VIEWPORT_EDGE = 8;
 // 下方至少要放得下这么多项，才认为「向下展开」是有意义的
@@ -69,8 +102,12 @@ function positionPanel(allowScroll = false): void {
   const el = wrapper.value;
   if (!el) return;
   const itemH = window.innerWidth < 600 ? 40 : 44;
-  const desiredH = Math.min(PANEL_MAX_H, Math.max(itemH, rows.value.length * itemH + 8));
-  const minBelowH = Math.min(desiredH, itemH * MIN_ROWS_BELOW + 8);
+  const searchH = showSearch.value ? SEARCH_ROW_H : 0;
+  const desiredH = Math.min(
+    PANEL_MAX_H,
+    Math.max(itemH, rows.value.length * itemH + SCROLL_PAD) + searchH + PANEL_BORDER,
+  );
+  const minBelowH = Math.min(desiredH, itemH * MIN_ROWS_BELOW + SCROLL_PAD + searchH + PANEL_BORDER);
 
   let rect = el.getBoundingClientRect();
   let spaceBelow = window.innerHeight - rect.bottom - PANEL_GAP - VIEWPORT_EDGE;
@@ -90,7 +127,11 @@ function positionPanel(allowScroll = false): void {
   const placeBelow = spaceBelow >= minBelowH || spaceBelow >= spaceAbove;
   // 高度必须夹到该侧真实可用空间：旧逻辑恒用 320，超出的部分要么被视口裁掉、
   // 要么盖住上方内容
-  const height = Math.max(itemH, Math.min(desiredH, placeBelow ? spaceBelow : spaceAbove));
+  // 下界必须把搜索行算进去。否则空间被挤到极小时（小屏 + 输入法弹起）height 会被钳到
+  // itemH，内层的 `height - 2 - searchH` 变负数 —— 负 max-height 是无效声明、会被忽略，
+  // 内层回落到 style.css 里的 318px，再被外层 overflow:hidden 裁掉，选项既看不见也滚不到。
+  // searchH 为 0 时与原来的 Math.max(itemH, ...) 完全等价。
+  const height = Math.max(itemH + searchH, Math.min(desiredH, placeBelow ? spaceBelow : spaceAbove));
   const top = placeBelow
     ? rect.bottom + PANEL_GAP
     : Math.max(VIEWPORT_EDGE, rect.top - height - PANEL_GAP);
@@ -104,8 +145,9 @@ function positionPanel(allowScroll = false): void {
     width: `${Math.round(rect.width)}px`,
   };
   // 高度给内层滚动容器，不能给 fixed 的外层（见 style.css .sl-select-panel 注释）。
-  // 减 2 是外层的上下边框，让整体不超出算出来的可用空间。
-  scrollStyle.value = { maxHeight: `${Math.round(height) - 2}px` };
+  // 减 PANEL_BORDER 是外层的上下边框、再减搜索行。desiredH 已把边框算进面板外高，
+  // 这里减回去后 maxHeight 恰好等于「选项 + 滚动容器 padding」，1 项也不会溢出出滚动条。
+  scrollStyle.value = { maxHeight: `${Math.round(height) - PANEL_BORDER - searchH}px` };
 }
 
 function toggle() {
@@ -114,11 +156,15 @@ function toggle() {
     openSelect.value = null;
     return;
   }
+  // 每次打开都从空关键词开始。搜索框本体随面板 v-if 销毁重建，所以只需复位这个 ref
+  // ——不必像 SlInput 的 inputKey 那样强行重建原生输入框。
+  query.value = '';
   openSelect.value = id;
   nextTick(() => positionPanel(true));
 }
 function select(value: string) {
   openSelect.value = null;
+  query.value = '';
   emit('update:modelValue', value);
 }
 
@@ -146,6 +192,12 @@ function onViewportScroll(event: Event) {
   handleViewportChange();
 }
 
+// 过滤后行数变了要重算高度：向上展开的面板若不重定位，`top` 还按旧的高行数算，
+// 面板与触发器之间会裂开一道空隙。传 false —— 这里不能再去抢用户的滚动位置。
+watch(keyword, () => {
+  if (!opened.value) return;
+  void nextTick(() => positionPanel(false));
+});
 watch(opened, (isOpen) => {
   if (isOpen) {
     document.addEventListener('pointerdown', onPointerDown, true);
@@ -169,8 +221,17 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
+  <!-- searchable 的下拉在浏览器里也要走自绘面板：原生 `<select>` 塞不进搜索框，
+       只有浏览器自带的「键入跳到首字母匹配项」，那是跳转而不是过滤，对中文歌单名
+       基本不工作。而旧版原生前端用的是自定义弹层、在浏览器里**是有**搜索框的，
+       只修 WebF 分支等于把 songloft-org/songloft#410 的回归留了一半在 Web 端。
+       代价：这几个下拉在浏览器里失去原生方向键选择与手机浏览器的系统选择器。
+
+       条件用 `searchable` 而不是 `showSearch`：后者会让同一个下拉在选项数跨过 5 时
+       在原生 select 与自绘面板之间来回换渲染分支、外观跳变。用 `searchable` 则两端
+       规则完全对称 —— 选项少时同样是自绘面板、同样没有搜索行。 -->
   <div
-    v-if="isWebFRuntime"
+    v-if="isWebFRuntime || searchable"
     ref="wrapper"
     class="sl-select-wrap"
     :class="{ 'sl-select-wrap-open': opened }"
@@ -195,6 +256,17 @@ onBeforeUnmount(() => {
       class="sl-select-panel sl-select-panel-fixed"
       :style="panelStyle"
     >
+      <!-- 刻意不 autofocus：打开下拉就调起输入法会把面板压缩到不便选择，
+           旧版原生前端（static/js/playlist.js）也是这么权衡的。 -->
+      <div v-if="showSearch" class="sl-select-panel-search">
+        <SlIcon name="search" :size="18" />
+        <SlInput
+          :model-value="query"
+          :placeholder="searchPlaceholder"
+          :aria-label="searchPlaceholder"
+          @update:model-value="(value) => (query = value)"
+        />
+      </div>
       <div
         class="sl-select-panel-scroll"
         role="listbox"
@@ -212,6 +284,7 @@ onBeforeUnmount(() => {
         >
           {{ option.label }}
         </div>
+        <div v-if="!rows.length" class="sl-select-empty">无匹配项</div>
       </div>
     </div>
   </div>
