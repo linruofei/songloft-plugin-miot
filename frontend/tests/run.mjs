@@ -38,6 +38,7 @@ const progress = read('views/PlayerProgress.vue');
 const songRow = read('views/SongRow.vue');
 const covers = read('covers.ts');
 const playlistHandler = fs.readFileSync(path.join(frontendRoot, '../src/handlers/playlist.ts'), 'utf8');
+const scheduleHandler = fs.readFileSync(path.join(frontendRoot, '../src/handlers/schedule.ts'), 'utf8');
 const lyricHandler = fs.readFileSync(path.join(frontendRoot, '../src/handlers/lyric.ts'), 'utf8');
 const voiceCommandHandler = fs.readFileSync(path.join(frontendRoot, '../src/handlers/voice_command.ts'), 'utf8');
 const voiceEngine = fs.readFileSync(path.join(frontendRoot, '../src/voicecmd/engine.ts'), 'utf8');
@@ -418,6 +419,24 @@ for (const [name, source] of [
 ]) {
   assert.match(source, /playlistLabel\(/, `${name} 的 playlistOptions 应使用 playlistLabel`);
 }
+
+// 定时任务的全局动作 enable_monitor / disable_monitor（songloft-org/songloft-plugin-miot#89）：
+// executor 早就支持，但 handler 的 validateTaskParams 漏了这两个 case，全部落到 default
+// 返回「未知的动作类型」，任务一个字节都存不进去。两端各有一份动作清单，都得盯：
+// 后端要放行参数与设备校验，前端要隐藏目标设备区、且列表别把原始值当文案显示。
+assert.match(scheduleHandler, /case 'enable_monitor':\s*case 'disable_monitor':/);
+assert.match(scheduleHandler, /function isGlobalAction\(action: TaskAction\)/);
+// 两处调用点（新增 / 更新）都必须跳过设备校验，否则关掉「所有受管理设备」就存不进去
+assert.equal(
+  (scheduleHandler.match(/if \(!isGlobalAction\(action\)\) \{\s*const targetErr/g) || []).length, 2,
+  'POST /schedules 与 /schedules/update 都要对全局动作跳过 validateTaskTarget',
+);
+assert.match(scheduleSettings, /const globalActions = \['enable_monitor', 'disable_monitor'\]/);
+assert.match(scheduleSettings, /<template v-if="!isGlobalAction">[\s\S]*?目标设备/);
+assert.match(scheduleSettings, /v-if="!isGlobalAction && !allManaged"/);
+assert.match(scheduleSettings, /if \(!global && !allManaged\.value/);
+// 列表副标题显示中文 label，不是 enable_monitor 这种原始值
+assert.match(scheduleSettings, /\{\{ actionLabel\(task\.action\) \}\}/);
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 assert.equal(clamp(120, 0, 100), 100);

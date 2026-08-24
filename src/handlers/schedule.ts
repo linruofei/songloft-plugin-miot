@@ -46,6 +46,14 @@ function validateSchedule(schedule: TaskSchedule): string | null {
   return null;
 }
 
+/**
+ * 全局动作（不绑定设备，executor 走 executeGlobalAction 分支）
+ * 这类任务的 target 由前端塞占位值，校验时必须跳过设备检查
+ */
+function isGlobalAction(action: TaskAction): boolean {
+  return action === 'enable_monitor' || action === 'disable_monitor';
+}
+
 /** 验证任务动作参数 */
 function validateTaskParams(action: TaskAction, params: TaskParams): string | null {
   switch (action) {
@@ -57,6 +65,10 @@ function validateTaskParams(action: TaskAction, params: TaskParams): string | nu
       break;
     case 'stop':
       // 无需额外参数
+      break;
+    case 'enable_monitor':
+    case 'disable_monitor':
+      // 全局动作，无需额外参数
       break;
     case 'set_play_mode':
       if (!params.play_mode) {
@@ -149,10 +161,12 @@ export function registerScheduleHandlers(
         return jsonResponse({ success: false, error: paramsErr });
       }
 
-      // 验证目标设备
-      const targetErr = validateTaskTarget(target);
-      if (targetErr) {
-        return jsonResponse({ success: false, error: targetErr });
+      // 验证目标设备（全局动作不绑定设备，跳过）
+      if (!isGlobalAction(action)) {
+        const targetErr = validateTaskTarget(target);
+        if (targetErr) {
+          return jsonResponse({ success: false, error: targetErr });
+        }
       }
 
       const now = new Date().toISOString();
@@ -202,10 +216,12 @@ export function registerScheduleHandlers(
         }
       }
 
-      // 验证目标设备
-      const targetErr = validateTaskTarget(target);
-      if (targetErr) {
-        return jsonResponse({ success: false, error: targetErr });
+      // 验证目标设备（全局动作不绑定设备，跳过；action 缺省时保持原有校验）
+      if (!isGlobalAction(action)) {
+        const targetErr = validateTaskTarget(target);
+        if (targetErr) {
+          return jsonResponse({ success: false, error: targetErr });
+        }
       }
 
       await configManager.updateScheduledTask(id, {
