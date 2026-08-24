@@ -1046,6 +1046,22 @@ export class IndexingManager {
     for (let i = 0; i < matchedSongs.length; i++) {
       const loc = songLocationMap.get(matchedSongs[i].id);
       if (loc) {
+        // 最佳全局匹配不在歌单但分数明显优于当前歌单匹配时，放弃歌单匹配，
+        // 让 findStandaloneSongByName 播放最佳匹配（songloft-org/songloft#412）
+        if (i > 0) {
+          const bestScore = scoreSongTokens(q,
+            matchedSongs[0].titleLower, matchedSongs[0].artistLower, matchedSongs[0].albumLower,
+            matchedSongs[0].titlePinyin, matchedSongs[0].artistPinyin, matchedSongs[0].albumPinyin);
+          const thisScore = scoreSongTokens(q,
+            matchedSongs[i].titleLower, matchedSongs[i].artistLower, matchedSongs[i].albumLower,
+            matchedSongs[i].titlePinyin, matchedSongs[i].artistPinyin, matchedSongs[i].albumPinyin);
+          if (bestScore > thisScore + 5) {
+            songloft.log.warn(
+              `[IndexingManager] findSongByName: 最佳全局匹配 "${matchedSongs[0].title}" (score=${bestScore.toFixed(1)}) 不在歌单，` +
+              `跳过低分歌单匹配 "${matchedSongs[i].title}" (score=${thisScore.toFixed(1)})，转独立歌曲路径`);
+            break;
+          }
+        }
         songloft.log.info(`[IndexingManager] findSongByName done (${elapsedMs}ms) → "${loc.songTitle}" by "${loc.artist}" in playlist="${loc.playlistName}" (globalRank=#${i + 1})`);
         return loc;
       }
