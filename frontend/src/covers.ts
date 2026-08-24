@@ -1,8 +1,31 @@
-import { computed, onMounted, onUnmounted, ref, watch, type ComputedRef } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch, type ComputedRef, type Ref } from 'vue';
 import type { Song } from './types';
 import { hostPathPrefix } from './api';
 
 const MAX_CONCURRENT_COVERS = 3;
+
+/**
+ * 全局可见性 nonce —— 每次页面从不可见变为可见时自增。
+ *
+ * 用于驱动列表封面（`SongRow`）在 Tab 切回时刷新：WebF 的 imageCache 在页面
+ * Offstage 期间可能驱逐已加载的图片，导致 `<img>` 显示空白**且不触发 error 事件**
+ * （画着一个已 dispose 的 `ui.Image`）。只有换掉 URL 才能让 WebF 重新解码。
+ *
+ * 播放器封面有自己的 `useSongCover` composable 独立处理；列表封面靠这个全局信号。
+ */
+export const listCoverNonce: Ref<number> = ref(0);
+
+let _visibilityListenerInstalled = false;
+
+export function installListCoverVisibilityRecovery(): void {
+  if (_visibilityListenerInstalled) return;
+  _visibilityListenerInstalled = true;
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' || !document.hidden) {
+      listCoverNonce.value += 1;
+    }
+  });
+}
 
 /** 同一首歌最多自动重试几次加载失败的封面。 */
 const MAX_COVER_RETRIES = 2;

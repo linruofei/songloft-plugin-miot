@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onUnmounted, ref, watch } from 'vue';
-import { acquireCoverSlot, songCoverUrl, type CoverSlot } from '../covers';
+import { acquireCoverSlot, listCoverNonce, songCoverUrl, type CoverSlot } from '../covers';
 import type { Song } from '../types';
 import { state } from '../store';
 import SlButton from '../ui/SlButton.vue';
@@ -12,6 +12,7 @@ const coverSrc = ref('');
 let coverSlot: CoverSlot | null = null;
 let coverGeneration = 0;
 let coverTimer: ReturnType<typeof setTimeout> | null = null;
+let appliedNonce = 0;
 
 function isCurrent() { return state.player.current_song?.id === props.song.id; }
 function duration(seconds?: number) {
@@ -29,21 +30,33 @@ function loadCover(): void {
   if (coverTimer) clearTimeout(coverTimer);
   coverTimer = setTimeout(() => {
     coverTimer = null;
-    loadCoverNow();
+    loadCoverNow(false);
   }, 220);
 }
 
-function loadCoverNow(): void {
+function loadCoverNow(isRefresh: boolean): void {
   const generation = ++coverGeneration;
   releaseCoverSlot();
-  coverSrc.value = '';
+  if (!isRefresh) coverSrc.value = '';
   const url = songCoverUrl(props.song, 96);
   if (!url) return;
 
   coverSlot = acquireCoverSlot();
   void coverSlot.promise.then(() => {
-    if (generation === coverGeneration) coverSrc.value = url;
+    if (generation !== coverGeneration) return;
+    const n = listCoverNonce.value;
+    coverSrc.value = n > 0 ? `${url}${url.includes('?') ? '&' : '?'}_r=${n}` : url;
+    appliedNonce = n;
   });
+}
+
+function refreshCover(): void {
+  if (!coverSrc.value) return;
+  if (coverTimer) clearTimeout(coverTimer);
+  coverTimer = setTimeout(() => {
+    coverTimer = null;
+    loadCoverNow(true);
+  }, 220);
 }
 
 function finishCoverLoad(): void {
@@ -56,6 +69,9 @@ function failCoverLoad(): void {
 }
 
 watch(() => [props.song.id, props.song.cover_url], loadCover, { immediate: true });
+watch(listCoverNonce, (n) => {
+  if (n > appliedNonce) refreshCover();
+});
 onUnmounted(() => {
   if (coverTimer) clearTimeout(coverTimer);
   coverGeneration += 1;

@@ -10,7 +10,7 @@ import SlInput from '../ui/SlInput.vue';
 import SlListView from '../ui/SlListView.vue';
 import SlSelect from '../ui/SlSelect.vue';
 import { openSelect } from '../ui/selectState';
-import { navigation, openPage } from '../runtime';
+import { navigation, openPage, useNativeList } from '../runtime';
 import { currentDevice, deviceName, messageOf, playlistLabel, playSong, refreshAll, selectPlaylist, state, visibleSongs } from '../store';
 import type { SelectOption, Song } from '../types';
 
@@ -18,7 +18,7 @@ const search = ref('');
 const songRenderLimit = ref(20);
 const songRenderBatchSize = 40;
 const playlistOptions = computed<SelectOption[]>(() => state.playlists.map((p) => ({ value: String(p.id), label: playlistLabel(p), searchText: p.name })));
-const renderedSongs = computed(() => visibleSongs.value.slice(0, songRenderLimit.value));
+const renderedSongs = computed(() => useNativeList ? visibleSongs.value : visibleSongs.value.slice(0, songRenderLimit.value));
 const noServerHint = computed(() => !state.config.server_host || state.config.server_host_status === 'loopback');
 const listMeasureRetries = 6;
 let listMeasureTimer: ReturnType<typeof setTimeout> | null = null;
@@ -58,8 +58,9 @@ function remeasureList(): void {
 }
 
 async function onPlaylist(value: string) { await selectPlaylist(value); }
-function resetSongRenderLimit(): void { songRenderLimit.value = 20; }
+function resetSongRenderLimit(): void { if (!useNativeList) songRenderLimit.value = 20; }
 function loadMoreSongs(event: Event): void {
+  if (useNativeList) return;
   const target = event.currentTarget as HTMLElement | null;
   if (!target || songRenderLimit.value >= visibleSongs.value.length) return;
   if (target.scrollTop + target.clientHeight >= target.scrollHeight - 160) {
@@ -92,7 +93,9 @@ function scrollToCurrentSong(attempt = 0): void {
 function locateCurrentSong() {
   const currentIndex = visibleSongs.value.findIndex((song) => song.id === state.player.current_song?.id);
   if (currentIndex < 0) return;
-  if (currentIndex >= songRenderLimit.value) songRenderLimit.value = Math.min(currentIndex + songRenderBatchSize, visibleSongs.value.length);
+  if (!useNativeList && currentIndex >= songRenderLimit.value) {
+    songRenderLimit.value = Math.min(currentIndex + songRenderBatchSize, visibleSongs.value.length);
+  }
   if (locateTimer) clearTimeout(locateTimer);
   void nextTick(() => scrollToCurrentSong());
 }
