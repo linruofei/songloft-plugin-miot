@@ -3,7 +3,7 @@
 
 import ttsCommandData from '../data/tts-commands.json';
 
-/** 小米账号服务基础 URL */
+/** 平台账号服务基础 URL */
 export const ACCOUNT_BASE_URL = 'https://account.xiaomi.com';
 
 /** 小爱音箱 API 主机 */

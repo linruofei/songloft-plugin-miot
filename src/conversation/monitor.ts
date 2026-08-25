@@ -27,7 +27,7 @@ interface DeviceMonitorState {
   deviceName: string;
   hardware: string;
   /**
-   * 去重基线，取自**小米服务端**返回的对话时间戳（`record.time`），
+   * 去重基线，取自**平台服务端**返回的对话时间戳（`record.time`），
    * 绝不能用本地 `Date.now()` 初始化 —— 见 primed 注释
    */
   lastTimestampMs: number;
@@ -35,7 +35,7 @@ interface DeviceMonitorState {
    * 是否已建立去重基线。
    *
    * false 时首轮 poll 只用返回结果建立基线，**不触发**回调 / Webhook / 消息缓冲。
-   * 这样基线与被比较的时间戳同源（都来自小米服务端），彻底不依赖本地系统时钟：
+   * 这样基线与被比较的时间戳同源（都来自平台服务端），彻底不依赖本地系统时钟：
    * - 旧实现用 `Date.now()` 当基线，系统时钟超前 N 时长 → 该时长内所有对话被静默丢弃，
    *   语音指令完全无响应，日志只有 "after filter: 0 new"，几乎无法归因
    * - 系统时钟落后 → 启动瞬间把最近 5 条历史对话当成新消息，重放旧语音指令
@@ -59,7 +59,7 @@ export interface DeviceMonitorStatusItem {
   device_id: string;
   device_name: string;
   is_running: boolean;
-  /** 去重基线（小米服务端时间戳）；0 = 首轮尚未建立基线 */
+  /** 去重基线（平台服务端时间戳）；0 = 首轮尚未建立基线 */
   last_timestamp_ms: number;
   /** 是否已建立去重基线（诊断用） */
   primed: boolean;
@@ -135,7 +135,7 @@ export class ConversationMonitor {
       await this.refreshDevices();
       if (!this.enabled) return;
 
-      // 注意：这里**不能**用 Date.now() 预置 lastTimestampMs（本地时钟与小米服务端
+      // 注意：这里**不能**用 Date.now() 预置 lastTimestampMs（本地时钟与平台服务端
       // 时间戳不同轴）。基线交给首轮 poll 用服务端返回值建立，见 pollDevice 的 primed 分支
       for (const dm of this.devices.values()) {
         dm.isRunning = true;

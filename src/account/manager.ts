@@ -1,5 +1,5 @@
 // MIoT 智能音箱插件 - 账号管理器
-// 管理多个小米账号的生命周期、登录状态和设备列表
+// 管理多个平台账号的生命周期、登录状态和设备列表
 
 import type {
   AccountConfig,
@@ -11,7 +11,7 @@ import { ConfigManager } from '../config/manager';
 
 /**
  * 账号管理器
- * 管理多个小米账号的创建、删除、登录状态和设备列表
+ * 管理多个平台账号的创建、删除、登录状态和设备列表
  */
 export class AccountManager {
   private configManager: ConfigManager;

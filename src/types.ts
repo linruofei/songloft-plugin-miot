@@ -5,12 +5,12 @@
 /** 账号配置（存储在 songloft.storage 中） */
 export interface AccountConfig {
   id: string;
-  account: string;           // 小米账号（用户名/邮箱/手机）
+  account: string;           // 平台账号（用户名/邮箱/手机）
   auth_type: string;         // "password" | "token" | "qrcode"
   login_method: string;      // "password" | "qrcode" | "token"
   password: string;          // 加密后密码
   pass_token: string;        // passToken
-  user_id: string;           // 小米用户ID
+  user_id: string;           // 平台用户ID
   services: Record<string, ServiceTokenInfo>;
   devices: DeviceConfig[];
   last_selected_device_id: string;
@@ -18,7 +18,7 @@ export interface AccountConfig {
   updated_at: string;
 }
 
-/** 小米服务Token信息 */
+/** 平台服务Token信息 */
 export interface ServiceTokenInfo {
   service_token: string;
   ssecurity: string;
@@ -44,7 +44,7 @@ export interface DeviceConfig {
 
 // ===== Token信息 =====
 
-/** 小米Token完整信息 */
+/** 平台Token完整信息 */
 export interface XiaomiTokenInfo {
   user_id: string;
   device_id: string;
@@ -69,7 +69,7 @@ export type LoginState = 'idle' | 'logging_in' | 'need_captcha' | 'need_verify' 
 
 // ===== 设备相关 =====
 
-/** 小米API返回的原始设备数据 */
+/** 平台 API返回的原始设备数据 */
 export interface MinaDevice {
   deviceID: string;
   name: string;
@@ -148,7 +148,7 @@ export interface PluginConfig {
   extra_music_api_models?: string[];
   indicator_light_enabled?: boolean;
   default_cover_id?: string;
-  touchscreen_lyrics_enabled?: boolean; // 触屏歌词：逐首匹配小米曲库以在触屏音箱显示歌词
+  touchscreen_lyrics_enabled?: boolean; // 触屏歌词：逐首匹配云端曲库以在触屏音箱显示歌词
   interrupt_tts_hint_enabled: boolean;
   interrupt_tts_hint_text: string;
   play_announcement_enabled: boolean;

@@ -4,7 +4,7 @@
 //   - 前端订阅 `wss?://.../api/v1/jsplugin/miot/conversation/ws?access_token=..&limit=50`
 //   - 所有订阅者共享一份对话缓冲：建连先推一帧快照（最近 N 条），随后有新对话即增量推送
 //   - 复用 ConversationMonitor 的观察者回调：monitor 每 tick 检测到新消息即触发回调，
-//     无需额外定时器，也不额外增加对小米云的轮询压力
+//     无需额外定时器，也不额外增加对云端的轮询压力
 //   - 无订阅者时注销 monitor 回调，避免无人观看时空转推送
 //
 // 与 status-stream 的差异：状态推送需按设备聚合、定时拉取融合状态；对话推送是全局广播、

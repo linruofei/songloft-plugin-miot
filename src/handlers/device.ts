@@ -305,7 +305,7 @@ export function registerDeviceHandlers(
         return jsonResponse({ success: false, error: 'account_id and device_id are required' });
       }
 
-      // 检查 4 秒物理缓存，防止高频轮询刷爆小米云端 API
+      // 检查 4 秒物理缓存，防止高频轮询刷爆云端 API
       const cached = getDeviceStatusCache(account_id, device_id);
       const now = Date.now();
       
@@ -333,7 +333,7 @@ export function registerDeviceHandlers(
         });
       }
 
-      // 缓存过期，穿透到小米云端查询真实物理状态
+      // 缓存过期，穿透到云端查询真实物理状态
       const raw = await getOrFetchDeviceStatus(account_id, device_id, () => minaService.getPlayerStatus(account_id, device_id));
       const info = raw?.data?.info;
       
@@ -353,7 +353,7 @@ export function registerDeviceHandlers(
             }
           }
 
-          // 状态枚举映射（小米硬件底层协议：1=playing, 2=paused, 0=stopped）
+          // 状态枚举映射（硬件底层协议：1=playing, 2=paused, 0=stopped）
           if (parsed.status === 1) state = 'playing';
           else if (parsed.status === 2) state = 'paused';
           else if (parsed.status === 0) state = 'stopped';

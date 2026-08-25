@@ -13,7 +13,7 @@ declare const crypto: {
 
 /**
  * MD5哈希
- * 用于小米登录的密码加密
+ * 用于平台登录的密码加密
  * @param str - 输入字符串
  * @returns 小写hex格式的MD5哈希
  */
@@ -24,7 +24,7 @@ export function md5(str: string): string {
 /**
  * 生成随机设备ID
  * 格式：16字节随机hex字符串（32位）
- * 用于模拟小米设备标识
+ * 用于模拟设备标识
  * @returns 32字符的hex字符串
  */
 export function generateDeviceId(): string {

@@ -1,6 +1,6 @@
 // MIoT 智能音箱插件 - Mina 认证模块
 // 翻译自 Go 源码: plugins/songloft-plugin-xiaomi/pkg/mina/auth.go
-// 实现小米3步登录流程：serviceLogin → serviceLoginAuth2 → 重定向获取 serviceToken
+// 实现平台3步登录流程：serviceLogin → serviceLoginAuth2 → 重定向获取 serviceToken
 
 import { CookieJar } from '../utils/cookie';
 import { getSetCookie, parseSetCookie } from '@songloft/plugin-sdk';
@@ -23,7 +23,7 @@ import type {
 } from './models';
 
 /**
- * MinaAuth - 小米账号认证器
+ * MinaAuth - 平台账号认证器
  * 实现完整的3步登录流程，支持密码登录、验证码、短信验证和 passToken 刷新
  */
 export class MinaAuth {
@@ -599,7 +599,7 @@ export class MinaAuth {
 // ===== 工具函数 =====
 
 /**
- * 去掉小米API响应的 JSON 前缀 "&&&START&&&"
+ * 去掉平台 API响应的 JSON 前缀 "&&&START&&&"
  */
 function stripJsonPrefix(body: string): string {
   return body.replace('&&&START&&&', '').trim();

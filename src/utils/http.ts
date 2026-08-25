@@ -3,7 +3,7 @@
 // 提供两组工具：
 //  1. httpFetch / fetchJSON：常规 JSON 请求；
 //  2. fetchWithRedirects：带 Cookie 跟踪的手动重定向链
-//     （小米登录流程涉及多次 3xx，需要逐步收集 Set-Cookie 并在下一跳带回）。
+//     （平台登录流程涉及多次 3xx，需要逐步收集 Set-Cookie 并在下一跳带回）。
 //
 // 所有方法都返回 Promise，调用方必须 await。
 
@@ -110,7 +110,7 @@ export async function httpFetch(
 /**
  * 带 Cookie 跟踪的重定向请求。
  *
- * 小米登录流程涉及多次 3xx 重定向，每步需要收集并回传 Cookie；
+ * 平台登录流程涉及多次 3xx 重定向，每步需要收集并回传 Cookie；
  * 通过 X-Fetch-No-Redirect 请求头让 Go 侧 fetch 不自动跟随重定向，
  * JS 侧手动循环处理。
  */

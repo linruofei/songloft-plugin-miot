@@ -25,7 +25,7 @@ export interface ConversationViewModel {
  *
  * query 取值与 VoiceEngine.extractQuery 同源：answer[0].question 优先，
  * 回退 intention.query；二者皆空时 query 为 ''，前端模板据此显示「未识别内容」。
- * 因此前端再出现「未识别内容」即可判定为小米 API 侧 record.query 确实为空，
+ * 因此前端再出现「未识别内容」即可判定为平台 API 侧 record.query 确实为空，
  * 而非本插件的数据结构错位。
  */
 export function toConversationViewModel(msg: ConversationMessage): ConversationViewModel {

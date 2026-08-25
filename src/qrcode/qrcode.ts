@@ -273,7 +273,7 @@ export class QRCodeLogin {
 
       if (!passToken || !userId) {
         // 没有 passToken，可能是中间状态（已扫码但未确认）
-        // 小米 LP 接口在扫码但未确认时不会返回 passToken
+        // 平台 LP 接口在扫码但未确认时不会返回 passToken
         // 实际上如果收到正常 JSON 响应但没有 passToken，通常是超时重连
         return { state: 'waiting', message: 'waiting for QR code confirmation' };
       }
@@ -447,7 +447,7 @@ export class QRCodeLogin {
 // ===== 工具函数 =====
 
 /**
- * 去掉小米 API 响应的 JSON 前缀 "&&&START&&&"
+ * 去掉平台 API 响应的 JSON 前缀 "&&&START&&&"
  */
 function stripJsonPrefix(body: string): string {
   return body.replace('&&&START&&&', '').trim();

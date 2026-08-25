@@ -135,7 +135,7 @@ export class MinaHTTPClient {
    * @param hardware - 设备硬件型号（用于选择播放方法）
    * @param extraModels - 用户自定义的额外 Music API 型号列表
    * @param lyricsMode - 触屏歌词模式：仅在 Music API 播放路径上启用，
-   *   逐首搜小米曲库匹配真实 audioID（搜不到回退 customAudioId），使触屏音箱显示歌词。
+   *   逐首搜云端曲库匹配真实 audioID（搜不到回退 customAudioId），使触屏音箱显示歌词。
    *   参考 xiaomusic：player_play_music 有兼容性风险，非兼容型号仍走 player_play_url。
    */
   async playByUrl(deviceId: string, url: string, hardware = '', extraModels?: string[], keepLight = false, customAudioId?: string, lyricsMode?: { enabled: boolean; songName?: string; metadata?: PlayMetadata }): Promise<boolean> {
@@ -176,7 +176,7 @@ export class MinaHTTPClient {
   }
 
   /**
-   * 搜索小米官方曲库匹配歌曲，返回真实 audioID（供触屏音箱拉取歌词/封面）
+   * 搜索云端曲库匹配歌曲，返回真实 audioID（供触屏音箱拉取歌词/封面）
    * 参照 xiaomusic _get_audio_id：按「歌名完全相等 + 歌手包含匹配」精确命中
    * @param target - 歌曲信息；字符串参数兼容旧的「歌名-歌手」格式
    * @param fallbackAudioId - 默认封面/歌词 ID；无结果或失败时返回

@@ -3,11 +3,11 @@
 // 用长连接推送替代前端每秒 HTTP 轮询 `/player/status`：
 //   - 前端订阅 `wss?://.../api/v1/jsplugin/miot/status/ws?account_id=..&device_id=..&access_token=..`
 //   - 同一设备的多个客户端共享一个后台推送循环（按 account_id:device_id 聚合）
-//   - 无订阅者时不启循环，避免无人观看时 24/7 空拉小米云
+//   - 无订阅者时不启循环，避免无人观看时 24/7 空拉云端
 //   - 状态与 HTTP 端点共用 `resolvePlayerStatus`，两条链路结果不漂移
 //
-// 真实打小米云的频率仍由 playlist.ts 的 4s 设备缓存 + in-flight 去重收敛，
-// WS 不额外增加对小米云的压力，仅消除前端↔插件的每秒请求开销。
+// 真实打云端的频率仍由 playlist.ts 的 4s 设备缓存 + in-flight 去重收敛，
+// WS 不额外增加对云端的压力，仅消除前端↔插件的每秒请求开销。
 
 import { parseQuery } from '@songloft/plugin-sdk';
 import type { WebSocketRequest, InboundWebSocket } from '@songloft/plugin-sdk';

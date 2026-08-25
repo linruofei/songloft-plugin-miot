@@ -54,7 +54,7 @@ export class MinaService {
   // ===== 设备列表 =====
 
   /**
-   * 获取设备列表（从小米API刷新，合并本地管理状态）
+   * 获取设备列表（从平台 API刷新，合并本地管理状态）
    * - 调用 client.getDeviceList() 获取最新设备列表
    * - 调用 accountManager.updateDeviceList() 合并到本地配置
    * - 返回合并后的设备信息（含 managed/volume/playMode 等本地设置）

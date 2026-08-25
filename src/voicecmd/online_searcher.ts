@@ -415,7 +415,7 @@ export class OnlineSearcher {
    *
    * @param keyword       搜索关键词
    * @param hint         可选的歌曲提示（title/artist/duration）
-   * @param accountId    小米账号ID
+   * @param accountId    平台账号ID
    * @param deviceId     设备ID
    * @param minaService  MinaService 实例（用于推送URL）
    * @returns 是否成功推送播放

@@ -90,7 +90,7 @@ async function resolveTargetDevice(
  * POST /voice-commands → 设置语音口令配置
  * POST /voice-commands/ai-test → 测试 AI 口令分析
  * POST /voice-commands/test → 模拟语音口令（完整匹配+执行）并返回诊断
- * POST /voice-commands/said → 模拟小米云对话消息并交给语音引擎处理
+ * POST /voice-commands/said → 模拟云端对话消息并交给语音引擎处理
  */
 export function registerVoiceCommandHandlers(
   router: Router,
