@@ -423,6 +423,7 @@ export async function seekPlayer(position: number): Promise<void> {
 export async function setVolume(volume: number): Promise<void> {
   const normalized = Math.max(0, Math.min(100, Math.round(volume)));
   state.player.volume = normalized;
+  volumeSetAt = Date.now();
   try {
     await post('/mina/volume', { ...targetBody(), volume: normalized });
     requestStatusRefresh();
@@ -436,17 +437,28 @@ export async function refreshPlayerStatus(): Promise<void> {
   if (statusRequestBusy) return;
   statusRequestBusy = true;
   try {
-    state.player = await get<PlayerStatus>(
+    const status = await get<PlayerStatus>(
       `/player/status${query({
         account_id: state.currentAccountId,
         device_id: state.currentDeviceId,
       })}`,
     );
+    applyPlayerStatus(status);
   } catch (error) {
     if (!state.statusConnected) console.warn('[miot] status refresh failed', messageOf(error));
   } finally {
     statusRequestBusy = false;
   }
+}
+
+let volumeSetAt = 0;
+const VOLUME_GRACE_MS = 3000;
+
+function applyPlayerStatus(incoming: PlayerStatus): void {
+  if (volumeSetAt && Date.now() - volumeSetAt < VOLUME_GRACE_MS) {
+    incoming = { ...incoming, volume: state.player.volume };
+  }
+  state.player = incoming;
 }
 
 let statusSocket: WebSocket | null = null;
@@ -495,7 +507,7 @@ function openStatusSocket() {
     statusSocket.onmessage = (event) => {
       try {
         const frame = JSON.parse(String(event.data));
-        if (frame?.type === 'status' && frame.data) state.player = frame.data;
+        if (frame?.type === 'status' && frame.data) applyPlayerStatus(frame.data);
       } catch {
         // Ignore malformed frames; the next valid status replaces them.
       }

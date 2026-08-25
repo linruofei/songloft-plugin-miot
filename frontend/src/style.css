@@ -283,6 +283,7 @@ html.webf-engine .player-volume-slider { width: 28px; height: 112px; transform: 
    （`songloft_slider.dart` 的 `_resolveSide` 改读 `computedValue`），但插件要在旧
    宿主上也能用，所以这里保留显式 px：px 的声明值本身就是像素，新旧宿主都走对。 */
 html.webf-engine .player-volume-slider .sl-slider-native { width: 28px; height: 112px; }
+html.webf-engine .player-volume-inline-slider .sl-slider-native { width: 100%; height: 28px; }
 html.webf-engine .player-sleep-popup { left: calc(50% - 140px); transform: none; }
 /* PlayerBar 工具区右对齐，弹层居中定位会从右侧溢出视口。
    改为右对齐：弹层右边与按钮右边对齐，向左展开。 */
