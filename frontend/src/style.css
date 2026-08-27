@@ -262,7 +262,7 @@ html.webf-engine .miot-app * { transform-origin: 0 0; }
    备选方案是把弹层也改成 `position: fixed` + JS 视口坐标（`.player-mode-popup` 与
    `SlSelect` 就是这么做的），代价是每个弹层都要自己算坐标。 */
 html.webf-engine .player-popup-dismiss { position: absolute; inset: auto; top: -100vh; right: -100vw; bottom: -100vh; left: -100vw; }
-.player-mode-popup, .player-volume-popup, .player-sleep-popup { position: absolute; z-index: 232; bottom: calc(100% + 8px); left: 50%; background: var(--md-surface); border: 1px solid var(--md-outline-variant); border-radius: 12px; box-shadow: var(--md-shadow-3); }
+.player-mode-popup, .player-volume-popup { position: absolute; z-index: 232; bottom: calc(100% + 8px); left: 50%; background: var(--md-surface); border: 1px solid var(--md-outline-variant); border-radius: 12px; box-shadow: var(--md-shadow-3); }
 .player-mode-popup { position: fixed; width: 160px; padding: 8px 0; transform: none; }
 .player-mode-option { width: 100%; height: 48px; min-height: 48px; display: flex; align-items: center; gap: 12px; padding: 8px 16px; border: 0; background: transparent; color: var(--md-on-surface); font-size: 14px; text-align: left; }
 .player-mode-option:hover { background: var(--md-surface-container-highest); }
@@ -274,7 +274,9 @@ html.webf-engine .player-popup-dismiss { position: absolute; inset: auto; top: -
 .player-volume-value { color: var(--md-on-surface-variant); font-size: 12px; font-weight: 500; }
 .player-volume-slider-shell { width: 44px; min-height: 104px; flex: 1; display: flex; align-items: center; justify-content: center; overflow: visible; }
 .player-volume-slider { width: 112px; flex: 0 0 112px; transform: rotate(-90deg); }
-.player-sleep-popup { width: 280px; max-width: calc(100vw - 32px); max-height: calc(100vh - 96px); overflow-y: auto; transform: translateX(-50%); }
+.player-sleep-popup { position: fixed; z-index: 232; width: 280px; max-width: calc(100vw - 32px); max-height: calc(100vh - 96px); overflow-y: auto; background: var(--md-surface); border: 1px solid var(--md-outline-variant); border-radius: 12px; box-shadow: var(--md-shadow-3); }
+/* 弹层位置由 JS popupStyle 控制（position: fixed），CSS 不再设 left/top/bottom/transform。
+   WebF 下改用 fixed 脱离 .player-popup-anchor 的堆叠上下文，避免遮罩压住弹层导致点不到。 */
 html.webf-engine .player-volume-popup { left: calc(50% - 32px); transform: none; }
 html.webf-engine .player-volume-slider { width: 28px; height: 112px; transform: none; }
 /* 原生滑块自己读 renderStyle 决定画布尺寸，而**旧版宿主**（≤ 2.11.5）读的是 CSS
@@ -284,11 +286,7 @@ html.webf-engine .player-volume-slider { width: 28px; height: 112px; transform: 
    宿主上也能用，所以这里保留显式 px：px 的声明值本身就是像素，新旧宿主都走对。 */
 html.webf-engine .player-volume-slider .sl-slider-native { width: 28px; height: 112px; }
 html.webf-engine .player-volume-inline-slider .sl-slider-native { width: 100%; height: 28px; }
-html.webf-engine .player-sleep-popup { left: calc(50% - 140px); transform: none; }
-/* PlayerBar 工具区右对齐，弹层居中定位会从右侧溢出视口。
-   改为右对齐：弹层右边与按钮右边对齐，向左展开。 */
-.player-bar-tools .player-sleep-popup { left: auto; right: 0; transform: none; }
-html.webf-engine .player-bar-tools .player-sleep-popup { left: auto; right: 0; }
+/* PlayerBar 工具区：弹层位置由 JS 通过 el.closest('.player-bar-tools') 自动检测并右对齐。 */
 html.webf-engine .fullscreen-player { height: 100vh; background: var(--md-surface, #FEF7FF); }
 html.webf-engine .fullscreen-playback { background: var(--md-surface, #FEF7FF); }
 html.webf-engine .settings-page { height: 100vh; min-height: 0; }
