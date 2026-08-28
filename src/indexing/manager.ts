@@ -921,7 +921,7 @@ export class IndexingManager {
    * @param songName - 歌曲名称
    * @returns { index, found }，index 为歌曲在歌单中的位置
    */
-  async findSongInPlaylist(playlistId: number, songName: string): Promise<{ index: number; found: boolean }> {
+  async findSongInPlaylist(playlistId: number, songName: string): Promise<{ index: number; found: boolean; songId?: number }> {
     if (!this.indexReady || !songName) {
       return { index: 0, found: false };
     }
@@ -938,7 +938,7 @@ export class IndexingManager {
       return { index: 0, found: false };
     }
 
-    const candidates = songs.map((s, i) => ({ title: s.title, index: i }));
+    const candidates = songs.map((s, i) => ({ title: s.title, index: i, id: s.id }));
 
     const matched = fuzzySearchList(
       songName,
@@ -948,7 +948,7 @@ export class IndexingManager {
     );
 
     if (matched.length > 0) {
-      return { index: matched[0].index, found: true };
+      return { index: matched[0].index, found: true, songId: matched[0].id };
     }
 
     return { index: 0, found: false };

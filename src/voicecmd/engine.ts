@@ -1616,8 +1616,11 @@ export class VoiceEngine {
       playMode = devCfg.play_mode as PlayMode;
     }
 
-    // 播放歌单，从匹配到的歌曲索引开始
-    const ok = await pm.play(loc.playlistId, loc.songIndex, playMode);
+    // 按 songId 定位播放：songIndex 来自缓存快照，歌单增删歌曲后会错位（#420）；
+    // songId 是稳定标识，playPlaylistFromSong 在重新加载歌单后按 ID 精确定位。
+    const ok = loc.songId
+      ? await pm.playPlaylistFromSong(loc.playlistId, loc.songId, playMode, loc.songIndex)
+      : await pm.play(loc.playlistId, loc.songIndex, playMode);
     if (ok) {
       songloft.log.info(`[VoiceEngine] Play song success: ${loc.songTitle} playlist="${loc.playlistName}" index=${loc.songIndex} mode=${playMode}`);
       return loc;
@@ -1630,7 +1633,9 @@ export class VoiceEngine {
       const newLoc = await this.indexingManager.findSongByName(searchTerm);
       if (newLoc) {
         songloft.log.info(`[VoiceEngine] Re-matched after refresh: ${newLoc.songTitle} playlist="${newLoc.playlistName}" playlistId=${newLoc.playlistId} songIndex=${newLoc.songIndex}`);
-        const retryOk = await pm.play(newLoc.playlistId, newLoc.songIndex, playMode);
+        const retryOk = newLoc.songId
+          ? await pm.playPlaylistFromSong(newLoc.playlistId, newLoc.songId, playMode, newLoc.songIndex)
+          : await pm.play(newLoc.playlistId, newLoc.songIndex, playMode);
         if (retryOk) {
           songloft.log.info(`[VoiceEngine] Retry play song success: ${newLoc.songTitle}`);
           return newLoc;
