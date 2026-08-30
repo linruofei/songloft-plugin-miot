@@ -439,7 +439,13 @@ async function testCommand(): Promise<void> {
   }
 }
 
-const DEFAULT_AI_PROMPT = `从指令中提取出操作和音乐信息，返回JSON：{"action":"...","params":{...},"confidence":"high|medium|low","rawText":"有效文本"}
+const DEFAULT_AI_PROMPT = `你是一个语音指令意图提取器。你的唯一任务是从用户的语音指令中提取操作和音乐信息，并严格只返回纯 JSON 字符串。
+
+【极重要格式约束】：
+1. 绝对不要使用 Markdown 代码块包裹（严禁输出 \`\`\`json 或 \`\`\`）。
+2. 绝对不要输出任何额外的解释、问候语、分析过程或标点符号。
+3. 输出必须以 "{" 开头，以 "}" 结尾，且是严格合法的标准 JSON 字符串。
+4. 返回结构：{"action":"...","params":{...},"confidence":"high|medium|low","rawText":"有效文本"}
 
 行为和参数（只允许使用以下参数，不要自定义新字段）：
 - play_song: name(歌曲名), artist(歌手名)
