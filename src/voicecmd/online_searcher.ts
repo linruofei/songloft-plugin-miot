@@ -320,7 +320,7 @@ export class OnlineSearcher {
             album: song.album,
             duration: song.duration,
             cover_url: song.cover_url,
-          });
+          }, pushUrl);
         }
         songloft.log.info('[OnlineSearcher] Playing online song (no-import)' + (transcoded ? ' [transcoded]' : '') + ': ' + song.title + ' - ' + song.artist + ' url=' + pushUrl);
         return true;

@@ -290,8 +290,11 @@ export function registerPlaylistHandlers(
         return jsonResponse({ success: true, data: [], message: '服务器地址为本地回环地址（localhost/127.0.0.1），MIoT 智能音箱无法访问。请在「设置」中修改为局域网 IP 地址。' });
       }
       const playlists = await songloft.playlists.list();
+      const allSongs = await songloft.songs.list({ limit: 1 });
+      const totalSongsCount = (allSongs && Array.isArray(allSongs)) ? (allSongs as any).total ?? (await songloft.songs.list({ limit: 100000 })).length : 0;
       const tempPlaylists = playlistManagerMap.getTempPlaylists();
       const allPlaylists = [
+        { id: -1, name: '全部歌曲', song_count: totalSongsCount },
         ...(playlists || []),
         ...tempPlaylists.map(tp => ({ id: tp.id, name: tp.name, song_count: tp.songCount })),
       ];
@@ -314,6 +317,11 @@ export function registerPlaylistHandlers(
           return jsonResponse({ success: true, data: [], expired: true });
         }
         return jsonResponse({ success: true, data: manager.getSongs() });
+      }
+      if (playlistId === -1) {
+        // 全部歌曲虚拟歌单
+        const songs = await songloft.songs.list({ limit: 100000 });
+        return jsonResponse({ success: true, data: songs });
       }
       // 获取歌单排序偏好
       let sortBy = '';

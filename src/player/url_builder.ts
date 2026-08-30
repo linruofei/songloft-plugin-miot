@@ -96,8 +96,14 @@ export class URLBuilder {
       return '';
     }
 
-    // 外部 URL 直接返回
+    // 外部/完整 URL 处理
     if (songUrl.startsWith('http://') || songUrl.startsWith('https://')) {
+      const seek = Math.floor(options?.seekSeconds || 0);
+      if (seek > 0 && song.type !== 'radio') {
+        const u = new URL(songUrl);
+        u.searchParams.set('seek', String(seek));
+        return u.toString();
+      }
       return songUrl;
     }
 

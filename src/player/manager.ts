@@ -524,7 +524,10 @@ export class PlaylistManager {
    * 同步外部/临时直推单曲的播放状态到 PlaylistManager，
    * 确保网页端播放条、WebSocket 状态推送与触屏歌词显示正确的歌曲信息与进度。
    */
-  setDirectPlayingSong(song: { id?: number; title: string; artist?: string; album?: string; duration?: number; cover_url?: string }): void {
+  setDirectPlayingSong(
+    song: { id?: number; title: string; artist?: string; album?: string; duration?: number; cover_url?: string },
+    pushUrl: string,
+  ): void {
     this.stopCheckTimer();
     const duration = song.duration && song.duration > 0 ? song.duration : 0;
     const directSong: Song = {
@@ -534,7 +537,7 @@ export class PlaylistManager {
       album: song.album || '',
       duration: duration,
       cover_url: song.cover_url || '',
-      url: '',
+      url: pushUrl,
       type: 'remote',
     };
     this.songs = [directSong];
@@ -542,7 +545,7 @@ export class PlaylistManager {
     this.playlistId = this.tempId;
     this.tempPlaylistName = `单曲: ${song.title}`;
     this.currentIndex = 0;
-    this.playMode = 'order';
+    this.playMode = 'singlePlay'; // 单曲播放模式：播完即停，绝不循环
     this.state = 'playing';
     this.hardStopped = false;
     this.pausedPositionSec = 0;
@@ -555,7 +558,7 @@ export class PlaylistManager {
     if (duration > 0) {
       this.startCheckTimer(duration);
     }
-    songloft.log.info(`[PlaylistManager] setDirectPlayingSong synced: "${song.title}" - ${song.artist || ''} duration=${duration}`);
+    songloft.log.info(`[PlaylistManager] setDirectPlayingSong synced: "${song.title}" - ${song.artist || ''} duration=${duration} (singlePlay mode)`);
   }
 
   /**
@@ -931,7 +934,13 @@ export class PlaylistManager {
 
     const attempt = async (retry: boolean): Promise<boolean> => {
       try {
-        const songs = await songloft.playlists.getSongs(playlistId, { limit: 100000, sort: sortBy, order: sortOrder } as any);
+        let songs: any[];
+        if (playlistId === -1) {
+          // 全部歌曲虚拟歌单
+          songs = await songloft.songs.list({ limit: 100000 });
+        } else {
+          songs = await songloft.playlists.getSongs(playlistId, { limit: 100000, sort: sortBy, order: sortOrder } as any);
+        }
         const desc = songs ? (Array.isArray(songs) ? String(songs.length) : 'non-array') : 'null';
         songloft.log.info(`[PlaylistManager] loadPlaylistSongs playlistId=${playlistId} sort=${sortBy} order=${sortOrder} returned=${desc}${retry ? ' (retry)' : ''}`);
         if (!songs || !Array.isArray(songs)) {
