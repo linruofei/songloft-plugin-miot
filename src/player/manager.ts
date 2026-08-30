@@ -530,6 +530,7 @@ export class PlaylistManager {
   setDirectPlayingSong(
     song: { id?: number; title: string; artist?: string; album?: string; duration?: number; cover_url?: string },
     pushUrl: string,
+    mode: PlayMode = 'singlePlay',
   ): void {
     this.stopCheckTimer();
     const duration = song.duration && song.duration > 0 ? song.duration : 0;
@@ -548,7 +549,7 @@ export class PlaylistManager {
     this.playlistId = this.tempId;
     this.tempPlaylistName = `单曲: ${song.title}`;
     this.currentIndex = 0;
-    this.playMode = 'singlePlay'; // 单曲播放模式：播完即停，绝不循环
+    this.playMode = mode;
     this.state = 'playing';
     this.hardStopped = false;
     this.pausedPositionSec = 0;
@@ -561,7 +562,7 @@ export class PlaylistManager {
     if (duration > 0) {
       this.startCheckTimer(duration);
     }
-    songloft.log.info(`[PlaylistManager] setDirectPlayingSong synced: "${song.title}" - ${song.artist || ''} duration=${duration} (singlePlay mode)`);
+    songloft.log.info(`[PlaylistManager] setDirectPlayingSong synced: "${song.title}" - ${song.artist || ''} duration=${duration} (${mode} mode)`);
   }
 
   /**

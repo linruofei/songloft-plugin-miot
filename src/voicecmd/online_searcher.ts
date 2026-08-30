@@ -407,6 +407,27 @@ export class OnlineSearcher {
       artist: song.artist,
     });
 
+    if (pm) {
+      // 入库但未挂载到特定歌单：同步单曲状态，但保留设备原有的播放模式（如 loop/random/order）
+      let playMode: PlayMode = 'order';
+      try {
+        const devices = await this.configManager.getDevices(accountId);
+        const devCfg = devices.find((d) => d.device_id === deviceId);
+        if (devCfg && devCfg.play_mode) playMode = devCfg.play_mode as PlayMode;
+      } catch (e) {
+        songloft.log.warn('[OnlineSearcher] Failed to read play mode for imported standalone song: ' + String(e));
+      }
+
+      pm.setDirectPlayingSong({
+        id: imported.id,
+        title: song.title,
+        artist: song.artist,
+        album: song.album,
+        duration: song.duration,
+        cover_url: song.cover_url,
+      }, playUrl, playMode);
+    }
+
     // 增量把这首独立远程歌曲加入内存索引，避免为一首歌重建全部歌单缓存。
     if (indexingManager) {
       indexingManager.addImportedSong(
