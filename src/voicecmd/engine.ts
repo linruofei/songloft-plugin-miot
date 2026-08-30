@@ -348,6 +348,16 @@ export class VoiceEngine {
     // AI 兜底（如果启用）
     const aiConfig = await this.configManager.getAIConfig();
     if (aiConfig.enabled) {
+      // 提前极速打断：若用户指令具有明确的点歌/听歌前缀特征（如“播放”、“放”、“听”、“点歌”、“我想听”、“来一首”等），
+      // 在发起耗时的 AI API 分析前立即异步向音箱下发 stopPlay，防止小爱官方在 AI 分析期间持续播放试听版
+      const isMusicPlayIntent = /^(播放|放|听|点歌|来一首|我想听|唱|搜|查找|来点|来首)/.test(query.trim()) || /(歌|音乐|单曲)/.test(query);
+      if (isMusicPlayIntent) {
+        songloft.log.info(`[VoiceEngine] Early interrupting speaker before AI analysis query="${query}"`);
+        this.minaService.stopPlay(accountId, msg.device_id).catch(e => {
+          songloft.log.warn('[VoiceEngine] Early stopPlay failed: ' + String(e));
+        });
+      }
+
       songloft.log.info(`[VoiceEngine] [AI] Analyzing query="${query}"`);
       const aiResult = await this.aiAnalyzer.analyze(query, aiConfig);
       if (aiResult) {
