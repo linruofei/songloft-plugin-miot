@@ -115,13 +115,6 @@ export class MinaService {
     }
 
     try {
-      // 播放前先暂停当前播放，防止小爱音箱出现两个声音叠加
-      await client.playerPause(deviceId);
-    } catch (e) {
-      songloft.log.warn('[MinaService] Pre-pause before play failed, continuing: ' + String(e));
-    }
-
-    try {
       // 获取设备硬件型号用于选择播放接口
       const { hardware } = await this.getDeviceIdentity(client, deviceId);
       const config = await this.configManager.getConfig();
