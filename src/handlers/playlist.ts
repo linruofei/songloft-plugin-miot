@@ -294,7 +294,7 @@ export function registerPlaylistHandlers(
       const totalSongsCount = (allSongs && Array.isArray(allSongs)) ? (allSongs as any).total ?? (await songloft.songs.list({ limit: 100000 })).length : 0;
       const tempPlaylists = playlistManagerMap.getTempPlaylists();
       const allPlaylists = [
-        { id: ALL_SONGS_PLAYLIST_ID, name: '全部歌曲', song_count: totalSongsCount },
+        { id: ALL_SONGS_PLAYLIST_ID, name: '全部', song_count: totalSongsCount },
         ...(playlists || []),
         ...tempPlaylists.map(tp => ({ id: tp.id, name: tp.name, song_count: tp.songCount })),
       ];
