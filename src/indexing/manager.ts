@@ -666,12 +666,20 @@ export class IndexingManager {
       const rawSongs = (await songloft.songs.list({ limit: songLimit })) ?? [];
 
       // 3. 构建轻量歌单/歌曲索引。这里只做字段整理与小写化，确保低配机器先 ready。
-      const newPlaylists: IndexedPlaylist[] = rawPlaylists.map(pl => ({
-        id: pl.id,
-        name: pl.name,
-        nameLower: pl.name.toLowerCase(),
-        songCount: (pl as any).song_count ?? (pl as any).songCount ?? 0,
-      }));
+      const newPlaylists: IndexedPlaylist[] = [
+        {
+          id: -100, // ALL_SONGS_PLAYLIST_ID
+          name: '全部',
+          nameLower: '全部',
+          songCount: rawSongs.length,
+        },
+        ...rawPlaylists.map(pl => ({
+          id: pl.id,
+          name: pl.name,
+          nameLower: pl.name.toLowerCase(),
+          songCount: (pl as any).song_count ?? (pl as any).songCount ?? 0,
+        })),
+      ];
       const newSongs = await this.buildSongIndex(rawSongs);
 
       // 4. 歌曲列表到达后立即 ready；歌单歌曲缓存改为后台加载，避免低配设备长时间阻塞。
@@ -829,7 +837,13 @@ export class IndexingManager {
   findPlaylistByName(name: string): IndexedPlaylist | null {
     if (!name) return null;
 
-    const nameLower = name.toLowerCase();
+    const nameLower = name.toLowerCase().trim();
+
+    // 针对“全部”、“全部歌曲”、“所有歌曲”等别名进行全局虚拟歌单命中
+    if (nameLower === '全部' || nameLower === '全部歌曲' || nameLower === '所有歌曲' || nameLower === '所有' || nameLower === '全部曲目') {
+      const allPl = this.playlists.find(pl => pl.id === -100);
+      if (allPl) return allPl;
+    }
 
     // 精确匹配
     const exact = this.playlists.find(pl => pl.nameLower === nameLower);
