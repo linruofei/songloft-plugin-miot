@@ -164,7 +164,6 @@ export class OnlineSearcher {
    * youtube 直链里的 & 不会污染参数分隔。
    */
   private async resolveDirectPushUrl(directUrl: string, duration?: number): Promise<string> {
-    if (this.isSpeakerPlayableUrl(directUrl)) return directUrl;
     const base = await getHostBaseUrl(); // 音箱可达地址（server_host），非 loopback 的 getHostAPIBaseUrl
     if (!base) {
       // server_host 未配：无法构造转码 URL，回退原样（大概率播不出，但不构造坏 URL）

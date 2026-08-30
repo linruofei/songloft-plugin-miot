@@ -595,7 +595,7 @@ export function registerPlaylistHandlers(
         return jsonResponse({ success: false, error: 'position must be a non-negative number' });
       }
 
-      const manager = playlistManagerMap.get(account_id, device_id);
+      const manager = await playlistManagerMap.getOrCreate(account_id, device_id);
       const song = manager?.getCurrentSong();
       if (!manager || !song) {
         return jsonResponse({ success: false, error: 'no active song for this device' });
