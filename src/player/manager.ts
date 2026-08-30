@@ -521,6 +521,44 @@ export class PlaylistManager {
   }
 
   /**
+   * 同步外部/临时直推单曲的播放状态到 PlaylistManager，
+   * 确保网页端播放条、WebSocket 状态推送与触屏歌词显示正确的歌曲信息与进度。
+   */
+  setDirectPlayingSong(song: { id?: number; title: string; artist?: string; album?: string; duration?: number; cover_url?: string }): void {
+    this.stopCheckTimer();
+    const duration = song.duration && song.duration > 0 ? song.duration : 0;
+    const directSong: Song = {
+      id: song.id || this.tempId,
+      title: song.title,
+      artist: song.artist || '',
+      album: song.album || '',
+      duration: duration,
+      cover_url: song.cover_url || '',
+      url: '',
+      type: 'remote',
+    };
+    this.songs = [directSong];
+    this.totalSongs = 1;
+    this.playlistId = this.tempId;
+    this.tempPlaylistName = `单曲: ${song.title}`;
+    this.currentIndex = 0;
+    this.playMode = 'order';
+    this.state = 'playing';
+    this.hardStopped = false;
+    this.pausedPositionSec = 0;
+    this.streamSeekOffsetSec = 0;
+    this.playbackSpeed = 1;
+    this.playStartTimeMs = Date.now();
+    this.clearPendingNextIndex();
+    this.clearVoiceSuspend();
+
+    if (duration > 0) {
+      this.startCheckTimer(duration);
+    }
+    songloft.log.info(`[PlaylistManager] setDirectPlayingSong synced: "${song.title}" - ${song.artist || ''} duration=${duration}`);
+  }
+
+  /**
    * 获取当前歌曲
    */
   getCurrentSong(): Song | null {

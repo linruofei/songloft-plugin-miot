@@ -313,6 +313,15 @@ export class OnlineSearcher {
           title: song.title,
           artist: song.artist,
         });
+        if (pm) {
+          pm.setDirectPlayingSong({
+            title: song.title,
+            artist: song.artist,
+            album: song.album,
+            duration: song.duration,
+            cover_url: song.cover_url,
+          });
+        }
         songloft.log.info('[OnlineSearcher] Playing online song (no-import)' + (transcoded ? ' [transcoded]' : '') + ': ' + song.title + ' - ' + song.artist + ' url=' + pushUrl);
         return true;
       }
