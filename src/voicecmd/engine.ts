@@ -364,7 +364,7 @@ export class VoiceEngine {
         songloft.log.info(`[VoiceEngine] [AI] Done: action=${aiResult.action} confidence=${aiResult.confidence} params=${JSON.stringify(aiResult.params)}`);
         if (aiResult.confidence !== 'low' && aiResult.action !== 'unknown') {
           songloft.log.info(`[VoiceEngine] [AI] → Executing fallback (high confidence, action=${aiResult.action})`);
-          const playedSong = await this.executeAIResult(aiResult, accountId, msg.device_id);
+          const playedSong = await this.executeAIResult(aiResult, accountId, msg.device_id, isMusicPlayIntent);
           if (memoryEnabled && (aiResult.action === 'play_song' || aiResult.action === 'play_artist') && playedSong) {
             this.queueMemorySuccess(query, playedSong);
           }
@@ -883,7 +883,7 @@ export class VoiceEngine {
   /**
    * 执行 AI 分析结果
    */
-  private async executeAIResult(result: AIAnalysisResult, accountId: string, deviceId: string): Promise<PlayedSong | null> {
+  private async executeAIResult(result: AIAnalysisResult, accountId: string, deviceId: string, alreadyInterrupted: boolean = false): Promise<PlayedSong | null> {
     songloft.log.info(`[VoiceEngine] [AI] Executing action=${result.action} params=${JSON.stringify(result.params)}`);
     const pm = this.playlistManagerMap.get(accountId, deviceId);
     const wasPlaying = pm?.isPlaying() ?? false;
@@ -900,9 +900,9 @@ export class VoiceEngine {
         // 歌名+歌手都有：歌名作主搜索词、歌手作辅助字段（多字段 cover 匹配）；
         // 只有其一：用非空者作主搜索词
         if (name && artist) {
-          playedSong = await this.executePlaySong(name, accountId, deviceId, artist);
+          playedSong = await this.executePlaySong(name, accountId, deviceId, artist, alreadyInterrupted);
         } else {
-          playedSong = await this.executePlaySong(name || artist, accountId, deviceId);
+          playedSong = await this.executePlaySong(name || artist, accountId, deviceId, undefined, alreadyInterrupted);
         }
         break;
       }
@@ -912,7 +912,7 @@ export class VoiceEngine {
           songloft.log.warn('[VoiceEngine] [AI] play_artist: no artist name');
           return null;
         }
-        playedSong = await this.executePlayArtist(artist, accountId, deviceId);
+        playedSong = await this.executePlayArtist(artist, accountId, deviceId, alreadyInterrupted);
         break;
       }
       case 'play_playlist': {
@@ -1083,7 +1083,7 @@ export class VoiceEngine {
    * 通过 IndexingManager 模糊匹配歌曲名，获取所在歌单及索引，然后调用 PlaylistManager 播放
    * 翻译自 Go 版本: voicecmd/engine.go executePlaySong
    */
-  private async executePlaySong(songName: string, accountId: string, deviceId: string, artist?: string): Promise<PlayedSong | null> {
+  private async executePlaySong(songName: string, accountId: string, deviceId: string, artist?: string, alreadyInterrupted: boolean = false): Promise<PlayedSong | null> {
     this.cancelPendingResume();
     const pm = await this.playlistManagerMap.getOrCreate(accountId, deviceId);
 
@@ -1104,11 +1104,13 @@ export class VoiceEngine {
     // 立即停止定时器和重置状态，防止后续异步操作期间旧定时器触发
     pm.prepareForNewPlayback();
 
-    // 打断音箱当前播报（停止播放），不在此处播放 TTS 提示
-    try {
-      await this.minaService.stopPlay(accountId, deviceId);
-    } catch (e) {
-      songloft.log.warn('[VoiceEngine] Failed to interrupt broadcast: ' + String(e));
+    // 如果前面 AI 阶段已经提前打断过，这里不再重复打断，避免二次 pause/stop 增加延迟与队列拥堵
+    if (!alreadyInterrupted) {
+      try {
+        await this.minaService.stopPlay(accountId, deviceId);
+      } catch (e) {
+        songloft.log.warn('[VoiceEngine] Failed to interrupt broadcast: ' + String(e));
+      }
     }
 
     const config = await this.configManager.getConfig();
