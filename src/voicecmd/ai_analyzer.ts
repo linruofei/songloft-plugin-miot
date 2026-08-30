@@ -6,7 +6,7 @@
 import type { AIConfig, AIAnalysisResult } from '../types';
 
 /** AI System Prompt */
-const AI_SYSTEM_PROMPT = `从指令中提取出操作和音乐信息，返回JSON：{"action":"...","params":{...},"confidence":"high|medium|low","rawText":"有效文本"}
+export const AI_SYSTEM_PROMPT = `从指令中提取出操作和音乐信息，返回JSON：{"action":"...","params":{...},"confidence":"high|medium|low","rawText":"有效文本"}
 
 行为和参数（只允许使用以下参数，不要自定义新字段）：
 - play_song: name(歌曲名), artist(歌手名)
@@ -89,8 +89,9 @@ export class AIAnalyzer {
   private async callAI(query: string, config: AIConfig): Promise<AIAnalysisResult> {
     songloft.log.info(`[AIAnalyzer] Calling ${config.api_url} model=${config.model} timeout=${config.timeout}s`);
 
+    const systemPrompt = (config.prompt && config.prompt.trim()) ? config.prompt.trim() : AI_SYSTEM_PROMPT;
     const messages = [
-      { role: 'system', content: AI_SYSTEM_PROMPT },
+      { role: 'system', content: systemPrompt },
       { role: 'user', content: `用户指令：${query}` },
     ];
 
@@ -145,57 +146,56 @@ export class AIAnalyzer {
 
   /**
    * 解析 AI 返回的 JSON
-   * reasoning_split=true 时 content 直接是干净 JSON，尝试直接解析
-   * 解析失败则兜底：从内容中提取 JSON
+   * 兼容 Markdown 代码块 (```json ... ```)、思考标签 (<think>...</think>) 以及前后附带文本的情况
    */
   private parseResponse(content: string): AIAnalysisResult {
-    const trimmed = content.trim();
+    let trimmed = content.trim();
 
-    // 优先尝试直接解析（reasoning_split=true 时 content 直接是 JSON）
+    // 1. 去除思考标签及其内部的所有思考过程 (e.g. <think>...</think> 或 [think]...[/think])
+    trimmed = trimmed
+      .replace(/<(?:think|thought)>[\s\S]*?<\/(?:think|thought)>/gi, '')
+      .replace(/\[(?:think|thought)\][\s\S]*?\[\/(?:think|thought)\]/gi, '')
+      .replace(/[\[\]\/?]*(?:think|思考|THINK)[\[\]\/?]*/gi, '')
+      .trim();
+
+    // 2. 去除外层的 Markdown 代码块包裹 (e.g. ```json\n{...}\n``` 或 ```\n{...}\n```)
+    const codeBlockMatch = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+    if (codeBlockMatch) {
+      trimmed = codeBlockMatch[1].trim();
+    }
+
+    // 3. 优先尝试直接解析整段文本
     try {
       const parsed = JSON.parse(trimmed);
-      return {
-        action: parsed.action || 'unknown',
-        params: parsed.params || {},
-        confidence: (parsed.confidence === 'high' || parsed.confidence === 'medium' || parsed.confidence === 'low')
-          ? parsed.confidence
-          : 'low',
-        rawText: parsed.rawText || '',
-      };
+      return this.formatResult(parsed);
     } catch {
-      songloft.log.warn(`[AIAnalyzer] Direct JSON parse failed, content: ${content.slice(0, 300)}`);
+      // 忽略，继续兜底提取
     }
 
-    // 兜底：去掉思考标签后再提取 JSON
-    let cleaned = trimmed
-      .replace(/[\[\]/?]*(?:think|思考|THINK)[\[\]/?]*/gi, '');
-
-    const firstBrace = cleaned.indexOf('{');
-    if (firstBrace === -1) {
-      throw new Error('No JSON found in response');
+    // 4. 兜底提取：在文本中寻找最外层的 '{' 和 '}'
+    const firstBrace = trimmed.indexOf('{');
+    const lastBrace = trimmed.lastIndexOf('}');
+    if (firstBrace !== -1 && lastBrace > firstBrace) {
+      const jsonStr = trimmed.slice(firstBrace, lastBrace + 1);
+      try {
+        const parsed = JSON.parse(jsonStr);
+        return this.formatResult(parsed);
+      } catch {
+        songloft.log.warn(`[AIAnalyzer] Fallback JSON parse failed, extracted: ${jsonStr.slice(0, 300)}`);
+      }
     }
 
-    let end = cleaned.lastIndexOf('}');
-    while (end > firstBrace) {
-      const after = cleaned.slice(end + 1);
-      if (/^[\s]*$/.test(after)) break;
-      end = cleaned.lastIndexOf('}', end - 1);
-    }
+    throw new Error(`Failed to parse AI response: ${trimmed.slice(0, 100)}`);
+  }
 
-    const jsonStr = cleaned.slice(firstBrace, end + 1);
-    try {
-      const parsed = JSON.parse(jsonStr);
-      return {
-        action: parsed.action || 'unknown',
-        params: parsed.params || {},
-        confidence: (parsed.confidence === 'high' || parsed.confidence === 'medium' || parsed.confidence === 'low')
-          ? parsed.confidence
-          : 'low',
-        rawText: parsed.rawText || '',
-      };
-    } catch {
-      songloft.log.warn(`[AIAnalyzer] Fallback JSON parse also failed, extracted: ${jsonStr.slice(0, 300)}`);
-      throw new Error(`Failed to parse AI response: ${jsonStr.slice(0, 100)}`);
-    }
+  private formatResult(parsed: any): AIAnalysisResult {
+    return {
+      action: parsed.action || 'unknown',
+      params: parsed.params || {},
+      confidence: (parsed.confidence === 'high' || parsed.confidence === 'medium' || parsed.confidence === 'low')
+        ? parsed.confidence
+        : 'low',
+      rawText: parsed.rawText || '',
+    };
   }
 }

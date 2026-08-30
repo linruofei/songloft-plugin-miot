@@ -153,8 +153,9 @@ html.webf-engine .miot-app * { transform-origin: 0 0; }
 .sl-button:hover:not(:disabled) { box-shadow: var(--md-shadow-1); }
 .sl-button-text:hover:not(:disabled) { background: var(--md-primary-container); }
 .sl-input, .sl-input-native { width: 100%; height: 42px; padding: 0 12px; border: 1px solid var(--md-outline); border-radius: var(--md-radius-sm); background: var(--md-surface); color: var(--md-on-surface); outline: 0; }
-.sl-input:focus { border-color: var(--md-primary); box-shadow: 0 0 0 1px var(--md-primary); }
-.sl-input:focus-visible, .sl-input-native:focus-visible { outline: 0; }
+.sl-textarea { width: 100%; min-height: 140px; padding: 10px 12px; border: 1px solid var(--md-outline); border-radius: var(--md-radius-sm); background: var(--md-surface); color: var(--md-on-surface); outline: 0; font-family: inherit; font-size: 13px; line-height: 1.6; resize: vertical; box-sizing: border-box; }
+.sl-input:focus, .sl-textarea:focus { border-color: var(--md-primary); box-shadow: 0 0 0 1px var(--md-primary); }
+.sl-input:focus-visible, .sl-input-native:focus-visible, .sl-textarea:focus-visible { outline: 0; }
 .sl-input-native { border: 0; }
 .sl-checkbox { width: 20px; height: 20px; accent-color: var(--md-primary); }
 .switch { position: relative; display: inline-block; width: 52px; height: 32px; cursor: pointer; flex-shrink: 0; }
@@ -365,6 +366,8 @@ html.webf-engine .settings-content { height: 100%; overflow-y: auto; }
 .setting-row-control { flex: 0 0 auto; }
 .form-body { min-width: 0; padding: 16px 20px 4px; }
 .field { min-width: 0; margin-bottom: 16px; }
+.field-header-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.field-header-row .field-label { margin-bottom: 0; }
 .field-label { display: block; margin-bottom: 6px; color: var(--md-on-surface-variant); font-size: 12px; font-weight: 500; }
 .field-help { margin-top: 6px; color: var(--md-on-surface-variant); font-size: 12px; overflow-wrap: anywhere; }
 .field-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 16px; }

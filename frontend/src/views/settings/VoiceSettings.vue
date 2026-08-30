@@ -439,6 +439,53 @@ async function testCommand(): Promise<void> {
   }
 }
 
+const DEFAULT_AI_PROMPT = `从指令中提取出操作和音乐信息，返回JSON：{"action":"...","params":{...},"confidence":"high|medium|low","rawText":"有效文本"}
+
+行为和参数（只允许使用以下参数，不要自定义新字段）：
+- play_song: name(歌曲名), artist(歌手名)
+- play_artist: artist(歌手名)
+- play_playlist: playlist(歌单名)
+- set_play_mode: mode=order|random|single|loop|singlePlay(播放模式，singlePlay 表示当前歌曲播完停止)
+- favorite: action=add|remove(收藏/取消收藏当前歌曲)
+- sleep_timer: duration(分钟数,整数)或songs_count(曲目数,整数)，两者只填一个。定时停止播放。
+- cancel_sleep_timer: 取消定时停止
+- query_sleep_timer: 查询定时剩余时间
+- next/previous/stop/unknown
+
+规则：
+1. "XX的YY"中XX是歌手名则artist=XX,name=YY，否则整句为歌名（如"你的答案"→name）
+2. 多歌手用逗号分隔。如"林俊杰、金莎的被风吹过的夏天"→name="被风吹过的夏天",artist="林俊杰,金莎"
+3. 翻唱以演唱者（翻唱者）为artist，原唱忽略。如"陈奕迅翻唱周杰伦的淘汰"→name="淘汰",artist="陈奕迅"
+4. "来一首"等同于"播放"，划入play_song
+5. 明确high模糊low其余medium
+6. rawText去语气词、口癖词
+7. "播放XX的歌/歌曲/音乐"或"来几首XX"中，name为泛称（歌/歌曲/音乐/曲/曲子）或无name时→action=play_artist,artist=XX。name为具体歌名时仍为play_song
+
+示例：
+周杰伦的晴天→{"action":"play_song","params":{"name":"晴天","artist":"周杰伦"},"confidence":"high","rawText":"周杰伦 晴天"}
+邓紫棋翻唱周杰伦的龙卷风→{"action":"play_song","params":{"name":"龙卷风","artist":"邓紫棋"},"confidence":"high","rawText":"龙卷风 邓紫棋"}
+播放周杰伦的歌→{"action":"play_artist","params":{"artist":"周杰伦"},"confidence":"high","rawText":"周杰伦"}
+我想听林俊杰的歌曲→{"action":"play_artist","params":{"artist":"林俊杰"},"confidence":"high","rawText":"林俊杰"}
+来几首邓紫棋→{"action":"play_artist","params":{"artist":"邓紫棋"},"confidence":"high","rawText":"邓紫棋"}
+随机播放→{"action":"set_play_mode","params":{"mode":"random"},"confidence":"high","rawText":"随机播放"}
+收藏这首歌→{"action":"favorite","params":{"action":"add"},"confidence":"high","rawText":"收藏这首歌"}
+取消收藏→{"action":"favorite","params":{"action":"remove"},"confidence":"high","rawText":"取消收藏"}
+半小时后停止播放→{"action":"sleep_timer","params":{"duration":30},"confidence":"high","rawText":"半小时后停止播放"}
+30分钟后关闭→{"action":"sleep_timer","params":{"duration":30},"confidence":"high","rawText":"30分钟后关闭"}
+一个半小时后停→{"action":"sleep_timer","params":{"duration":90},"confidence":"high","rawText":"一个半小时后停"}
+再听3首就停→{"action":"sleep_timer","params":{"songs_count":3},"confidence":"high","rawText":"再听3首就停"}
+5首歌后停止播放→{"action":"sleep_timer","params":{"songs_count":5},"confidence":"high","rawText":"5首歌后停止播放"}
+取消定时→{"action":"cancel_sleep_timer","params":{},"confidence":"high","rawText":"取消定时"}
+还有多久停→{"action":"query_sleep_timer","params":{},"confidence":"high","rawText":"还有多久停"}`;
+
+async function resetAIPrompt(): Promise<void> {
+  const confirmed = await confirmAction('恢复默认提示词', '确定要将 AI 系统的提示词重置为默认值吗？');
+  if (!confirmed) return;
+  state.config.ai_config.prompt = DEFAULT_AI_PROMPT;
+  await saveConfig({ ai_config: state.config.ai_config });
+  notify('已恢复默认提示词', 'success');
+}
+
 async function testAI(): Promise<void> {
   if (!aiTestQuery.value.trim()) return;
   aiTestBusy.value = true;
@@ -710,6 +757,21 @@ async function deleteMemoryRecord(id?: string): Promise<void> {
       <div class="field"><label class="field-label">API 地址</label><SlInput :model-value="state.config.ai_config.api_url || ''" placeholder="https://api.example.com/v1" @update:model-value="state.config.ai_config.api_url = $event" @change="saveConfig({ ai_config: state.config.ai_config })" /></div>
       <div class="field"><label class="field-label">API Key</label><SlInput :model-value="state.config.ai_config.api_key || ''" type="password" placeholder="sk-..." @update:model-value="state.config.ai_config.api_key = $event" @change="saveConfig({ ai_config: state.config.ai_config })" /></div>
       <div class="field-grid"><div class="field"><label class="field-label">模型</label><SlInput :model-value="state.config.ai_config.model || ''" placeholder="qwen-flash" @update:model-value="state.config.ai_config.model = $event" @change="saveConfig({ ai_config: state.config.ai_config })" /></div><div class="field"><label class="field-label">超时（秒）</label><SlInput :model-value="String(state.config.ai_config.timeout || 6)" type="number" @update:model-value="state.config.ai_config.timeout = Math.max(1, Math.min(30, Number($event) || 6))" @change="saveConfig({ ai_config: state.config.ai_config })" /></div></div>
+      <div class="field">
+        <div class="field-header-row">
+          <label class="field-label">系统提示词 (System Prompt)</label>
+          <SlButton variant="text" label="恢复默认" icon="restart_alt" @click="resetAIPrompt" />
+        </div>
+        <textarea
+          class="sl-textarea"
+          :value="state.config.ai_config.prompt !== undefined && state.config.ai_config.prompt !== '' ? state.config.ai_config.prompt : DEFAULT_AI_PROMPT"
+          placeholder="留空时自动使用默认提示词"
+          rows="8"
+          @input="state.config.ai_config.prompt = ($event.target as HTMLTextAreaElement).value"
+          @change="saveConfig({ ai_config: state.config.ai_config })"
+        />
+        <div class="field-help">支持自定义指令行为、参数提取规则与少量样本示例，修改后实时保存生效。</div>
+      </div>
       <div class="command-test-panel command-test-panel-inset"><strong>AI 分析测试</strong><div class="inline-fields"><SlInput v-model="aiTestQuery" placeholder="输入自然语言口令" @submit="testAI" /><SlButton variant="outlined" label="测试分析" icon="science" :disabled="aiTestBusy" @click="testAI" /></div><pre v-if="aiTestResult" class="result-pre">{{ aiTestResult }}</pre></div>
     </div>
   </SectionCard>

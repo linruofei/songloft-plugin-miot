@@ -13,6 +13,7 @@ export interface AIConfig {
   api_key?: string;
   model?: string;
   timeout?: number;
+  prompt?: string;
 }
 
 export interface MiotConfig {

@@ -262,6 +262,7 @@ export interface AIConfig {
   api_key: string;
   model: string;
   timeout: number;         // 秒数，默认 6
+  prompt?: string;         // 自定义系统提示词，留空时使用默认提示词
 }
 
 /** AI 分析结果 */

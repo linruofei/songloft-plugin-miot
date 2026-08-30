@@ -352,6 +352,9 @@ export function registerConfigHandlers(
         if (typeof newAI.timeout === 'number') {
           aiConfig.timeout = newAI.timeout;
         }
+        if (typeof newAI.prompt === 'string') {
+          aiConfig.prompt = newAI.prompt;
+        }
         await configManager.saveAIConfig(aiConfig);
       }
 
