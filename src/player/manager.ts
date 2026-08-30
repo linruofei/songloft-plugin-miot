@@ -30,9 +30,12 @@ const EXTERNAL_STOP_TAIL_GUARD_SEC = 15;
 /** 连续命中"未在播放"多少次才判定为真实外部停止，抵御小爱偶发误报（单次误报会被下一轮探测纠正） */
 const EXTERNAL_STOP_CONFIRM_COUNT = 2;
 
-/** 判断 playlistId 是否为临时歌单 */
+/** 全部歌曲虚拟歌单 ID（定义为 -100，避免与临时歌单冲突） */
+export const ALL_SONGS_PLAYLIST_ID = -100;
+
+/** 判断 playlistId 是否为临时歌单（排除 ALL_SONGS_PLAYLIST_ID） */
 export function isTempPlaylistId(id: number): boolean {
-  return id < 0;
+  return id < 0 && id !== ALL_SONGS_PLAYLIST_ID;
 }
 
 /** 统一播放模式，并兼容旧版 Web 前端曾写入的别名。 */
@@ -935,7 +938,7 @@ export class PlaylistManager {
     const attempt = async (retry: boolean): Promise<boolean> => {
       try {
         let songs: any[];
-        if (playlistId === -1) {
+        if (playlistId === ALL_SONGS_PLAYLIST_ID) {
           // 全部歌曲虚拟歌单
           songs = await songloft.songs.list({ limit: 100000 });
         } else {

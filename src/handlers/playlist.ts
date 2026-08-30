@@ -3,7 +3,7 @@
 
 import { jsonResponse, parseQuery } from '@songloft/plugin-sdk';
 import type { Router, HTTPRequest } from '@songloft/plugin-sdk';
-import { PlaylistManagerMap, isTempPlaylistId, normalizePlayMode } from '../player/manager';
+import { ALL_SONGS_PLAYLIST_ID, PlaylistManagerMap, isTempPlaylistId, normalizePlayMode } from '../player/manager';
 import type { PlaylistManager } from '../player/manager';
 import { MinaService } from '../service/service';
 import { ConfigManager } from '../config/manager';
@@ -294,7 +294,7 @@ export function registerPlaylistHandlers(
       const totalSongsCount = (allSongs && Array.isArray(allSongs)) ? (allSongs as any).total ?? (await songloft.songs.list({ limit: 100000 })).length : 0;
       const tempPlaylists = playlistManagerMap.getTempPlaylists();
       const allPlaylists = [
-        { id: -1, name: '全部歌曲', song_count: totalSongsCount },
+        { id: ALL_SONGS_PLAYLIST_ID, name: '全部歌曲', song_count: totalSongsCount },
         ...(playlists || []),
         ...tempPlaylists.map(tp => ({ id: tp.id, name: tp.name, song_count: tp.songCount })),
       ];
@@ -311,17 +311,17 @@ export function registerPlaylistHandlers(
       if (!playlistId || isNaN(playlistId)) {
         return jsonResponse({ success: false, error: 'invalid playlist id' });
       }
+      if (playlistId === ALL_SONGS_PLAYLIST_ID) {
+        // 全部歌曲虚拟歌单
+        const songs = await songloft.songs.list({ limit: 100000 });
+        return jsonResponse({ success: true, data: songs });
+      }
       if (isTempPlaylistId(playlistId)) {
         const manager = playlistManagerMap.findByPlaylistId(playlistId);
         if (!manager) {
           return jsonResponse({ success: true, data: [], expired: true });
         }
         return jsonResponse({ success: true, data: manager.getSongs() });
-      }
-      if (playlistId === -1) {
-        // 全部歌曲虚拟歌单
-        const songs = await songloft.songs.list({ limit: 100000 });
-        return jsonResponse({ success: true, data: songs });
       }
       // 获取歌单排序偏好
       let sortBy = '';
