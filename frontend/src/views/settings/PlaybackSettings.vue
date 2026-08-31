@@ -32,7 +32,8 @@ const coverSelectOptions = computed(() => coverOptions.map(({ value, label }) =>
 const coverPreview = computed(() => coverOptions.find((option) => option.value === String(state.config.default_cover_id))?.image || coverOptions[0].image);
 
 async function saveNumber(key: 'song_transition_offset' | 'play_announcement_delay' | 'smart_resume_timeout' | 'conversation_poll_interval' | 'max_song_index' | 'external_search_timeout' | 'voice_memory_max_records', raw: string, min: number, max: number) {
-  const value = Math.max(min, Math.min(max, Number.parseInt(raw, 10) || min));
+  const parsed = Number.parseInt(raw, 10);
+  const value = Math.max(min, Math.min(max, Number.isNaN(parsed) ? min : parsed));
   if (key === 'song_transition_offset') transition.value = String(value);
   if (key === 'play_announcement_delay') announcementDelay.value = String(value);
   try { await saveConfig({ [key]: value }); } catch (error) { notify(messageOf(error), 'error'); }
