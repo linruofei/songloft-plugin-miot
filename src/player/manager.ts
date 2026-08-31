@@ -1025,7 +1025,7 @@ export class PlaylistManager {
     if (song.type === 'radio' || (song.duration > 0 && seekSeconds >= song.duration - 3)) {
       seekSeconds = 0;
     }
-    // 电台�����倍速概念，服务端会忽略 speed；本地/网络歌曲才带。
+    // 电台没有倍速概念，服务端会忽略 speed；本地/网络歌曲才带。
     const effectiveSpeed = song.type === 'radio' ? 1 : speed;
 
     // 检查服务器地址
@@ -1035,7 +1035,7 @@ export class PlaylistManager {
       return false;
     }
 
-    // ��取是否强制 MP3 / 电台转码 / 音量均衡。config 下面还要给 song_transition_offset 用，
+    // 读取是否强制 MP3 / 电台转码 / 音量均衡。config 下面还要给 song_transition_offset 用，
     // 一次 getConfig 两处消费。
     const config = await this.configManager.getConfig();
 
