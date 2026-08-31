@@ -141,6 +141,7 @@ export class PlaylistManager {
   // accountId/deviceId 仍作为「主设备」用于持久化、日志与自动切歌定时器的进度校准参考。
   private targets: DeviceTargetRef[];
   private onAdvanceHook?: () => boolean;
+  private announceOnSongChange: boolean = false;
 
   constructor(
     accountId: string,
@@ -164,6 +165,10 @@ export class PlaylistManager {
    */
   setOnAdvanceHook(hook: (() => boolean) | undefined): void {
     this.onAdvanceHook = hook;
+  }
+
+  setAnnounceOnSongChange(enabled: boolean): void {
+    this.announceOnSongChange = enabled;
   }
 
   /**
@@ -589,7 +594,7 @@ export class PlaylistManager {
     // 让本来正常 paused 的成员一起对齐到同一位置——多房间同步优先于少一次重推。
     if (this.hardStopped) {
       songloft.log.info(`[PlaylistManager] Resume after hard stop, replay with seek=${this.pausedPositionSec.toFixed(1)}s`);
-      return this.playCurrent({ seekSeconds: this.pausedPositionSec });
+      return this.playCurrent({ seekSeconds: this.pausedPositionSec, skipAnnouncement: true });
     }
 
     this.stopCheckTimer();
@@ -675,7 +680,7 @@ export class PlaylistManager {
       return;
     }
     songloft.log.warn(`[PlaylistManager] Device did not actually resume, re-pushing URL with seek=${resumeFromSec.toFixed(1)}s`);
-    await this.playCurrent({ seekSeconds: resumeFromSec });
+    await this.playCurrent({ seekSeconds: resumeFromSec, skipAnnouncement: true });
   }
 
   /**
@@ -785,7 +790,7 @@ export class PlaylistManager {
    * @param seekSeconds 曲内起播位置；传 0/省略即从头重播（旧行为）
    */
   async replayCurrent(seekSeconds = 0): Promise<boolean> {
-    return this.playCurrent({ seekSeconds });
+    return this.playCurrent({ seekSeconds, skipAnnouncement: true });
   }
 
   /** 当前推给设备的流从歌曲第几秒开始（设备上报的 position 需加此值才是曲内绝对位置） */
@@ -832,7 +837,7 @@ export class PlaylistManager {
 
     // 以当前曲内位置为起点重推一条新倍速的流
     const position = wasPaused ? this.pausedPositionSec : this.getPosition();
-    const ok = await this.playCurrent({ seekSeconds: position, speed: clamped });
+    const ok = await this.playCurrent({ seekSeconds: position, speed: clamped, skipAnnouncement: true });
     if (ok && wasPaused) {
       // 暂停态切倍速：重推后立即暂停，保持暂停态（与 /player/seek 的语义一致）
       await this.pause();
@@ -951,7 +956,48 @@ export class PlaylistManager {
    * @param opts.speed 本次流的播放倍速。不传则沿用 this.playbackSpeed（保持上次设置）。
    *   服务端产出变速流，本机据此换算进度与自动切歌定时器。
    */
-  private async playCurrent(opts?: { seekSeconds?: number; speed?: number }): Promise<boolean> {
+  private async announceCurrentSong(song: { title: string; artist: string }): Promise<void> {
+    const config = await this.configManager.getConfig();
+    if (!config.play_announcement_enabled) return;
+    if (!song.title) return;
+
+    const text = (config.play_announcement_template || '即将播放{artist}的{song}')
+      .replace(/\{song\}/g, song.title)
+      .replace(/\{artist\}/g, song.artist || '未知歌手');
+
+    if (!text.trim()) return;
+
+    songloft.log.info(`[PlaylistManager] Play announcement: "${text}" mode=${config.play_announcement_wait_mode}`);
+    await this.minaService.textToSpeech(this.accountId, this.deviceId, text);
+
+    switch (config.play_announcement_wait_mode) {
+      case 'fixed': {
+        const delay = Math.max(0, Math.min(10, config.play_announcement_delay || 3));
+        await new Promise(r => setTimeout(r, delay * 1000));
+        break;
+      }
+      case 'poll': {
+        const maxWaitMs = Math.min(15000, Math.ceil(text.length / 4) * 1500 + 2000);
+        const pollInterval = 800;
+        const startTime = Date.now();
+        await new Promise(r => setTimeout(r, 1000));
+        while (Date.now() - startTime < maxWaitMs) {
+          const { status } = await this.minaService.getPlayState(this.accountId, this.deviceId);
+          if (status !== 1) break;
+          await new Promise(r => setTimeout(r, pollInterval));
+        }
+        break;
+      }
+      case 'auto':
+      default: {
+        const estimatedMs = Math.ceil(text.length / 4) * 1000 + 1000;
+        await new Promise(r => setTimeout(r, estimatedMs));
+        break;
+      }
+    }
+  }
+
+  private async playCurrent(opts?: { seekSeconds?: number; speed?: number; skipAnnouncement?: boolean }): Promise<boolean> {
     if (this.currentIndex < 0 || this.currentIndex >= this.songs.length) {
       songloft.log.error('[PlaylistManager] Invalid current index: ' + this.currentIndex);
       return false;
@@ -963,6 +1009,14 @@ export class PlaylistManager {
     this.clearPendingNextIndex();
 
     const song = this.songs[this.currentIndex];
+
+    if (!opts?.skipAnnouncement) {
+      const scope = (await this.configManager.getConfig()).play_announcement_scope || 'voice';
+      if (scope === 'all' || this.announceOnSongChange) {
+        await this.announceCurrentSong(song);
+      }
+    }
+
     // 本次流的倍速：显式传入优先，否则沿用当前值（切歌/续播时保持上次倍速不丢）。
     const speed = typeof opts?.speed === 'number' && opts.speed > 0 ? opts.speed : this.playbackSpeed;
     // 起播位置夹到 [0, duration-3)：贴近结尾的 seek 会让服务端零输出并降级成整首重播，
@@ -971,7 +1025,7 @@ export class PlaylistManager {
     if (song.type === 'radio' || (song.duration > 0 && seekSeconds >= song.duration - 3)) {
       seekSeconds = 0;
     }
-    // 电台无倍速概念，服务端会忽略 speed；本地/网络歌曲才带。
+    // 电台�����倍速概念，服务端会忽略 speed；本地/网络歌曲才带。
     const effectiveSpeed = song.type === 'radio' ? 1 : speed;
 
     // 检查服务器地址
@@ -981,7 +1035,7 @@ export class PlaylistManager {
       return false;
     }
 
-    // 读取是否强制 MP3 / 电台转码 / 音量均衡。config 下面还要给 song_transition_offset 用，
+    // ��取是否强制 MP3 / 电台转码 / 音量均衡。config 下面还要给 song_transition_offset 用，
     // 一次 getConfig 两处消费。
     const config = await this.configManager.getConfig();
 
@@ -1376,7 +1430,7 @@ export class PlaylistManager {
     await new Promise(r => setTimeout(r, 3000));
     if (this.state !== 'playing' || this.currentIndex !== retryIndex) return;
 
-    const retryOk = await this.playCurrent();
+    const retryOk = await this.playCurrent({ skipAnnouncement: true });
     if (retryOk) {
       await this.persistState();
       return;

@@ -54,6 +54,7 @@ const defaultConfig: MiotConfig = {
   play_announcement_template: '即将播放{artist}的{song}',
   play_announcement_wait_mode: 'auto',
   play_announcement_delay: 3,
+  play_announcement_scope: 'voice',
   smart_resume_timeout: 30,
   default_cover_id: '',
   touchscreen_lyrics_enabled: false,

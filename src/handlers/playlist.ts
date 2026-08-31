@@ -367,6 +367,7 @@ export function registerPlaylistHandlers(
 
       // 起始歌曲优先按 song_id 定位：调用方（网页列表）的下标可能基于一份已过期的歌单快照，
       // 与服务端此刻拉到的顺序错位就会播成邻近的歌（#59）。song_id 找不到时才退回下标。
+      manager.setAnnounceOnSongChange(false);
       let ok: boolean;
       if (isTempPlaylistId(playlistId)) {
         // 临时歌单（语音「播放歌手XX」等）只存在于内存，没法按 ID 重新拉取
@@ -481,6 +482,7 @@ export function registerPlaylistHandlers(
       }
 
       // 处于 stopped 状态或 resumePlayback 失败，重新播放
+      manager.setAnnounceOnSongChange(false);
       if (isTempPlaylistId(status.playlist_id)) {
         // 临时歌单：内存中歌曲列表仍在，直接重放
         const songs = manager.getSongs();
@@ -529,6 +531,7 @@ export function registerPlaylistHandlers(
         return jsonResponse({ success: false, error: 'no active playlist for this device' });
       }
 
+      manager.setAnnounceOnSongChange(false);
       const ok = await manager.previous();
       if (!ok) {
         return jsonResponse({ success: false, error: 'failed to play previous' });
@@ -556,6 +559,7 @@ export function registerPlaylistHandlers(
         return jsonResponse({ success: false, error: 'no active playlist for this device' });
       }
 
+      manager.setAnnounceOnSongChange(false);
       const ok = await manager.next();
       if (!ok) {
         const status = manager.getStatus();

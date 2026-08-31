@@ -1041,6 +1041,7 @@ export class VoiceEngine {
     }
 
     // 播放歌单
+    pm.setAnnounceOnSongChange(true);
     const ok = await pm.play(matchedPlaylist.id, startIndex, playMode);
     if (ok) {
       songloft.log.info(`[VoiceEngine] Play playlist success: ${matchedPlaylist.name} index=${startIndex} mode=${playMode}`);
@@ -1055,6 +1056,7 @@ export class VoiceEngine {
       const newPlaylist = this.indexingManager.findPlaylistByName(matchedPlaylist.name);
       if (newPlaylist) {
         songloft.log.info(`[VoiceEngine] Re-matched playlist after refresh: ${newPlaylist.name} (id=${newPlaylist.id})`);
+        pm.setAnnounceOnSongChange(true);
         const retryOk = await pm.play(newPlaylist.id, 0, playMode);
         if (retryOk) {
           songloft.log.info(`[VoiceEngine] Retry play playlist success: ${newPlaylist.name}`);
@@ -1234,8 +1236,7 @@ export class VoiceEngine {
 
     const startIndex = Math.floor(Math.random() * fullSongs.length);
 
-    await this.announceArtistPlay(cleanArtist, accountId, deviceId);
-
+    pm.setAnnounceOnSongChange(true);
     const ok = await pm.playWithSongs(fullSongs as any, startIndex, 'random', '歌手: ' + cleanArtist, cleanArtist);
     if (!ok) {
       songloft.log.error(`[VoiceEngine] play_artist failed for "${cleanArtist}"`);
@@ -1305,7 +1306,7 @@ export class VoiceEngine {
     if (!local) {
       return null;
     }
-    return await this.playSongCandidate(local, pm, searchTerm, songName, accountId, deviceId, !!external);
+    return await this.playSongCandidate(local, pm, searchTerm, songName, accountId, deviceId);
   }
 
   /**
@@ -1357,7 +1358,7 @@ export class VoiceEngine {
         songloft.log.warn(`[VoiceEngine] Parallel fallback: source=${failedSource} found a candidate but failed to play, retrying with source=${race.candidate.source} keyword="${songName}"`);
       }
 
-      const played = await this.playSongCandidate(race.candidate, pm, searchTerm, songName, accountId, deviceId, failedSource !== null);
+      const played = await this.playSongCandidate(race.candidate, pm, searchTerm, songName, accountId, deviceId);
       if (played) {
         return played;
       }
@@ -1526,11 +1527,8 @@ export class VoiceEngine {
     requestedSongName: string,
     accountId: string,
     deviceId: string,
-    skipAnnouncement?: boolean,
   ): Promise<PlayedSong | null> {
-    if (!skipAnnouncement) {
-      await this.announceBeforePlay(candidate, accountId, deviceId);
-    }
+    pm.setAnnounceOnSongChange(true);
 
     switch (candidate.source) {
       case 'local_index': {
@@ -1740,6 +1738,7 @@ export class VoiceEngine {
   private async executeNext(accountId: string, deviceId: string): Promise<void> {
     this.cancelPendingResume();
     const pm = await this.playlistManagerMap.getOrCreate(accountId, deviceId);
+    pm.setAnnounceOnSongChange(true);
     const ok = await pm.next();
     if (ok) {
       songloft.log.info(`[VoiceEngine] Next song success`);
@@ -1754,6 +1753,7 @@ export class VoiceEngine {
   private async executePrevious(accountId: string, deviceId: string): Promise<void> {
     this.cancelPendingResume();
     const pm = await this.playlistManagerMap.getOrCreate(accountId, deviceId);
+    pm.setAnnounceOnSongChange(true);
     const ok = await pm.previous();
     if (ok) {
       songloft.log.info(`[VoiceEngine] Previous song success`);
@@ -1897,87 +1897,6 @@ export class VoiceEngine {
     } else {
       songloft.log.warn('[VoiceEngine] Failed to restore playback after voice interaction');
       await pm.stop();
-    }
-  }
-
-  private extractCandidateInfo(candidate: SongSearchCandidate): { title: string; artist: string } {
-    switch (candidate.source) {
-      case 'local_index':
-        return { title: candidate.loc.songTitle, artist: candidate.loc.artist };
-      case 'remote_song':
-        return { title: candidate.song.title, artist: candidate.song.artist };
-      case 'external_search':
-        return { title: candidate.song.title, artist: candidate.song.artist || '' };
-    }
-  }
-
-  private async announceBeforePlay(
-    candidate: SongSearchCandidate,
-    accountId: string,
-    deviceId: string,
-  ): Promise<void> {
-    const config = await this.configManager.getConfig();
-    if (!config.play_announcement_enabled) return;
-
-    const { title, artist } = this.extractCandidateInfo(candidate);
-    if (!title) return;
-
-    const text = (config.play_announcement_template || '即将播放{artist}的{song}')
-      .replace(/\{song\}/g, title)
-      .replace(/\{artist\}/g, artist || '未知歌手');
-
-    if (!text.trim()) return;
-
-    songloft.log.info(`[VoiceEngine] Play announcement: "${text}" mode=${config.play_announcement_wait_mode}`);
-    await this.minaService.textToSpeech(accountId, deviceId, text);
-    await this.waitAfterAnnouncement(config, text.length, accountId, deviceId);
-  }
-
-  private async announceArtistPlay(artist: string, accountId: string, deviceId: string): Promise<void> {
-    const config = await this.configManager.getConfig();
-    if (!config.play_announcement_enabled) return;
-
-    const text = (config.play_announcement_template || '即将播放{artist}的{song}')
-      .replace(/\{song\}/g, '歌曲')
-      .replace(/\{artist\}/g, artist || '未知歌手');
-
-    if (!text.trim()) return;
-
-    songloft.log.info(`[VoiceEngine] Play announcement (artist): "${text}" mode=${config.play_announcement_wait_mode}`);
-    await this.minaService.textToSpeech(accountId, deviceId, text);
-    await this.waitAfterAnnouncement(config, text.length, accountId, deviceId);
-  }
-
-  private async waitAfterAnnouncement(
-    config: { play_announcement_wait_mode: string; play_announcement_delay: number },
-    textLength: number,
-    accountId: string,
-    deviceId: string,
-  ): Promise<void> {
-    switch (config.play_announcement_wait_mode) {
-      case 'fixed': {
-        const delay = Math.max(0, Math.min(10, config.play_announcement_delay || 3));
-        await new Promise(r => setTimeout(r, delay * 1000));
-        break;
-      }
-      case 'poll': {
-        const maxWaitMs = Math.min(15000, Math.ceil(textLength / 4) * 1500 + 2000);
-        const pollInterval = 800;
-        const startTime = Date.now();
-        await new Promise(r => setTimeout(r, 1000));
-        while (Date.now() - startTime < maxWaitMs) {
-          const { status } = await this.minaService.getPlayState(accountId, deviceId);
-          if (status !== 1) break;
-          await new Promise(r => setTimeout(r, pollInterval));
-        }
-        break;
-      }
-      case 'auto':
-      default: {
-        const estimatedMs = Math.ceil(textLength / 4) * 1000 + 1000;
-        await new Promise(r => setTimeout(r, estimatedMs));
-        break;
-      }
     }
   }
 
