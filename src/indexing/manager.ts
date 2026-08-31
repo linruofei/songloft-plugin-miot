@@ -272,6 +272,16 @@ const PLAYLIST_REFRESH_COOLDOWN_MS = 60_000;
 
 /** 进程内拼音缓存：跨 refresh 复用，避免同一歌手/歌名反复转拼音。 */
 const PINYIN_CACHE_LIMIT = 20000;
+
+const CHINESE_DIGIT_MAP: Record<string, string> = {
+  '〇': '0', '零': '0', '一': '1', '二': '2', '三': '3',
+  '四': '4', '五': '5', '六': '6', '七': '7', '八': '8', '九': '9',
+  '两': '2',
+};
+
+function normalizeChineseDigits(s: string): string {
+  return Array.from(s).map(ch => CHINESE_DIGIT_MAP[ch] ?? ch).join('');
+}
 const pinyinCache = new Map<string, string>();
 
 /** query 分词结果（token + 预转拼音，len<2 的 token 拼音留空不参与拼音匹配） */
@@ -834,6 +844,14 @@ export class IndexingManager {
     // 精确匹配
     const exact = this.playlists.find(pl => pl.nameLower === nameLower);
     if (exact) return exact;
+
+    // 中文数字归一化匹配（语音识别常把阿拉伯数字转写为中文数字，如 "946" → "九四六"）
+    const nameDigitNorm = normalizeChineseDigits(nameLower);
+    const digitMatch = this.playlists.find(pl => {
+      const plNorm = normalizeChineseDigits(pl.nameLower);
+      return plNorm === nameDigitNorm && pl.nameLower !== nameLower;
+    });
+    if (digitMatch) return digitMatch;
 
     // 回退到模糊搜索
     const results = this.searchPlaylist(name);
