@@ -338,17 +338,22 @@ export class OnlineSearcher {
     const pid = config.external_search_playlist_id;
     let appendedPlaylistId: number | undefined;
     if (pid) {
-      try {
-        const plToken = await songloft.plugin.getToken();
-        const apiBase = await getHostAPIBaseUrl();
-        await fetch(`${apiBase}/api/v1/playlists/${pid}/songs`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${plToken}` },
-          body: JSON.stringify({ song_ids: [imported.id] }),
-        });
-        const pidNum = Number(pid);
-        if (!Number.isNaN(pidNum)) appendedPlaylistId = pidNum;
-      } catch (e) { songloft.log.warn(`[OnlineSearcher] 追加歌单失败: ${String(e)}`); }
+      const pidNum = Number(pid);
+      if (pidNum === -100) {
+        // -100 是虚拟「全部」歌单，歌曲入库即天然属于全部歌曲，无需向数据库写歌单关联
+        appendedPlaylistId = -100;
+      } else {
+        try {
+          const plToken = await songloft.plugin.getToken();
+          const apiBase = await getHostAPIBaseUrl();
+          await fetch(`${apiBase}/api/v1/playlists/${pid}/songs`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${plToken}` },
+            body: JSON.stringify({ song_ids: [imported.id] }),
+          });
+          if (!Number.isNaN(pidNum)) appendedPlaylistId = pidNum;
+        } catch (e) { songloft.log.warn(`[OnlineSearcher] 追加歌单失败: ${String(e)}`); }
+      }
     }
 
     // 已追加到目标歌单且提供了播放管理器：接管为完整歌单播放，从这首新歌
