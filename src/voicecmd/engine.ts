@@ -353,8 +353,14 @@ export class VoiceEngine {
       const isMusicPlayIntent = /^(播放|放|听|点歌|来一首|我想听|唱|搜|查找|来点|来首)/.test(query.trim()) || /(歌|音乐|单曲)/.test(query);
       if (isMusicPlayIntent) {
         songloft.log.info(`[VoiceEngine] Early interrupting speaker before AI analysis query="${query}"`);
+        // 并发：stop 停止当前播放 + TTS 静音占位抢占官方试听 TTS 通道
+        // 官方的"好呢，请欣赏试听版..."与插件 TTS 争抢 mibrain 队列，
+        // 插件先入队则官方 TTS 被延后/丢弃，"。"极短（约 0.1s）不造成任何听感干扰
         this.minaService.stopPlay(accountId, msg.device_id).catch(e => {
           songloft.log.warn('[VoiceEngine] Early stopPlay failed: ' + String(e));
+        });
+        this.minaService.textToSpeech(accountId, msg.device_id, '。').catch(e => {
+          songloft.log.warn('[VoiceEngine] Early TTS silence placeholder failed: ' + String(e));
         });
       }
 
