@@ -49,6 +49,7 @@ export interface MiotConfig {
   play_announcement_template: string;
   play_announcement_wait_mode: string;
   play_announcement_delay: number;
+  play_announcement_scope: string;
   smart_resume_timeout: number;
   default_cover_id: string | number;
   touchscreen_lyrics_enabled: boolean;

@@ -111,6 +111,7 @@ export function registerConfigHandlers(
           play_announcement_template: config.play_announcement_template || '即将播放{artist}的{song}',
           play_announcement_wait_mode: config.play_announcement_wait_mode || 'auto',
           play_announcement_delay: config.play_announcement_delay ?? 3,
+          play_announcement_scope: config.play_announcement_scope || 'voice',
           conversation_poll_interval: config.conversation_poll_interval ?? 1,
           conversation_poll_debug: !!config.conversation_poll_debug,
           smart_resume_timeout: config.smart_resume_timeout ?? 30,
@@ -296,6 +297,12 @@ export function registerConfigHandlers(
       }
       if (body.play_announcement_delay !== undefined) {
         config.play_announcement_delay = Math.max(0, Math.min(10, Number(body.play_announcement_delay) || 3));
+      }
+      if (body.play_announcement_scope !== undefined) {
+        const scope = String(body.play_announcement_scope);
+        if (scope === 'voice' || scope === 'all') {
+          config.play_announcement_scope = scope;
+        }
       }
 
       // 更新 conversation_poll_interval（联动 Monitor 重启）

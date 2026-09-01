@@ -69,6 +69,7 @@ function defaultPluginConfig(): PluginConfig {
     play_announcement_template: '即将播放{artist}的{song}',
     play_announcement_wait_mode: 'auto',
     play_announcement_delay: 3,
+    play_announcement_scope: 'voice',
     conversation_poll_interval: 1,
     conversation_poll_debug: false,
     smart_resume_timeout: 30,
