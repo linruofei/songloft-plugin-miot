@@ -9,7 +9,7 @@ import SlButton from '../ui/SlButton.vue';
 import SlIcon from '../ui/SlIcon.vue';
 import PlayerModePopup from './PlayerModePopup.vue';
 import PlayerSleepTimerPopup from './PlayerSleepTimerPopup.vue';
-import PlayerVolumeSlider from './PlayerVolumeSlider.vue';
+import PlayerVolumePopup from './PlayerVolumePopup.vue';
 
 const isWide = ref(window.innerWidth > 760);
 function onResize() { isWide.value = window.innerWidth > 760; }
@@ -206,8 +206,9 @@ async function cancelSleepTimer(): Promise<void> {
           :disabled="state.playerBusy"
           @change="setPlayMode"
         />
-        <PlayerVolumeSlider
+        <PlayerVolumePopup
           :model-value="Number(state.player.volume || 0)"
+          popup-id="bar-volume"
           :disabled="state.playerBusy"
           @change="setVolume"
         />
