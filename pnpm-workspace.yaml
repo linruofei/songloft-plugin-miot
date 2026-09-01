@@ -1,3 +1,5 @@
+packages: []
+
 allowBuilds:
   esbuild: true
 # pnpm 默认对发布不足 24h 的包做 supply-chain 拦截（minimumReleaseAge）。
