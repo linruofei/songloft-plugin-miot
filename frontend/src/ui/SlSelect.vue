@@ -110,14 +110,17 @@ function positionPanel(allowScroll = false): void {
   const minBelowH = Math.min(desiredH, itemH * MIN_ROWS_BELOW + SCROLL_PAD + searchH + PANEL_BORDER);
 
   let rect = el.getBoundingClientRect();
-  let spaceBelow = window.innerHeight - rect.bottom - PANEL_GAP - VIEWPORT_EDGE;
+  // 播放条 fixed 在视口底部时要从可用空间中扣掉（songloft-org/songloft#432）
+  const playerBar = document.querySelector<HTMLElement>('.player-bar-shell');
+  const bottomEdge = playerBar ? playerBar.getBoundingClientRect().top : window.innerHeight;
+  let spaceBelow = bottomEdge - rect.bottom - PANEL_GAP - VIEWPORT_EDGE;
   if (allowScroll && spaceBelow < minBelowH) {
     // 滚动会触发已注册的 scroll 监听 → handleViewportChange → positionPanel，挡掉自激
     repositioning = true;
     try {
       if (scrollNearestBy(el, minBelowH - spaceBelow) > 0) {
         rect = el.getBoundingClientRect();
-        spaceBelow = window.innerHeight - rect.bottom - PANEL_GAP - VIEWPORT_EDGE;
+        spaceBelow = bottomEdge - rect.bottom - PANEL_GAP - VIEWPORT_EDGE;
       }
     } finally {
       repositioning = false;

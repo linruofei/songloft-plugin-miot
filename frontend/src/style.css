@@ -110,8 +110,9 @@ html.webf-engine .miot-app * { transform-origin: 0 0; }
 .player-toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
 .toolbar-field { min-width: 0; flex: 1; }
 .toolbar-divider { width: 1px; height: 32px; background: var(--md-outline-variant); }
-.sl-select-wrap { position: relative; z-index: 0; width: 100%; }
-.sl-select-wrap-open { z-index: 80; }
+/* 不给 z-index：wrap 不创建层叠上下文，子元素 fixed 面板和遮罩直接参与根层叠上下文，
+   z-index 300/200 能可靠地盖住播放条(80)和歌曲列表(songloft-org/songloft#432)。 */
+.sl-select-wrap { position: relative; width: 100%; }
 .sl-select-wrap .sl-select-trigger { display: block; width: 100%; height: 40px; padding: 0 12px; border: 1px solid var(--md-outline); border-radius: var(--md-radius-sm); background: var(--md-surface); color: var(--md-on-surface); }
 .sl-select-wrap .sl-select-trigger:hover { border-color: var(--md-outline); background: var(--md-surface-container-high); box-shadow: none; }
 .sl-select-wrap .sl-select-trigger:focus-visible { outline: 0; }
