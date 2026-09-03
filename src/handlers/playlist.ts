@@ -121,6 +121,10 @@ function syncManagerFromDeviceState(
     if (localPosition - devicePosition >= 5 && manager.canCalibrateAutoNextTimer(devicePosition)) {
       manager.resetAutoNextTimer(devicePosition);
     }
+  } else if (localState === 'stopped' && deviceState === 'playing' && deviceReportsProgress) {
+    // 插件已 stopped 但设备在播放：用户通过物理按键或其他外部途径恢复了播放。
+    // 重新接管自动切歌，避免歌曲播完后音箱单曲循环（songloft-org/songloft-plugin-miot#95）。
+    manager.handleExternalResume(devicePosition);
   }
 }
 

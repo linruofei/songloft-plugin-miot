@@ -850,6 +850,9 @@ export class VoiceEngine {
       case 'stop':
         await this.executeStop(accountId, deviceId);
         break;
+      case 'resume':
+        await this.executeResume(accountId, deviceId);
+        break;
       case 'favorite':
         await this.executeFavorite(accountId, deviceId, result.command.param || 'add');
         break;
@@ -937,6 +940,9 @@ export class VoiceEngine {
         break;
       case 'stop':
         await this.executeStop(accountId, deviceId);
+        break;
+      case 'resume':
+        await this.executeResume(accountId, deviceId);
         break;
       case 'favorite':
         await this.executeFavorite(accountId, deviceId, result.params?.action || 'add');
@@ -1778,6 +1784,42 @@ export class VoiceEngine {
     const pm = await this.playlistManagerMap.getOrCreate(accountId, deviceId);
     await pm.stop();
     songloft.log.info(`[VoiceEngine] Playback stopped`);
+  }
+
+  /**
+   * 恢复播放：paused/playing(voice suspended) 走 resumePlayback，
+   * stopped 且有歌单走 playCurrent 重推当前歌曲（与 POST /player/toggle 同策略）。
+   */
+  private async executeResume(accountId: string, deviceId: string): Promise<void> {
+    this.cancelPendingResume();
+    const pm = this.playlistManagerMap.get(accountId, deviceId);
+    if (!pm || !pm.hasPlaylist()) {
+      songloft.log.warn('[VoiceEngine] Resume: no playlist loaded');
+      await this.minaService.textToSpeech(accountId, deviceId, '没有正在播放的内容');
+      return;
+    }
+
+    const status = pm.getStatus();
+
+    if (status.state === 'paused' || status.state === 'playing') {
+      const ok = await pm.resumePlayback();
+      if (ok) {
+        songloft.log.info('[VoiceEngine] Playback resumed');
+        return;
+      }
+    }
+
+    if (status.state === 'stopped' || status.state === 'paused') {
+      pm.setAnnounceOnSongChange(false);
+      const ok = await pm.replayCurrent();
+      if (ok) {
+        songloft.log.info('[VoiceEngine] Playback restarted from current song');
+        return;
+      }
+    }
+
+    songloft.log.warn('[VoiceEngine] Resume failed');
+    await this.minaService.textToSpeech(accountId, deviceId, '恢复播放失败');
   }
 
   /**
