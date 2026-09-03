@@ -1,6 +1,13 @@
 name: Release Plugin
 
 on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'README.md'
+      - 'docs/**'
+      - '.gitignore'
   workflow_dispatch:
     inputs:
       version:
@@ -33,8 +40,23 @@ jobs:
       - name: Check for new commits since last release
         id: check
         run: |
-          if [ "${{ github.event_name }}" != "schedule" ]; then
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "手动触发，跳过门禁直接发版"
+            echo "should_release=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # push 触发时，检查最新提交是否为机器人自动产生的 bump 提交，防止死循环
+          COMMIT_MSG="$(git log -1 --pretty=%B)"
+          if echo "$COMMIT_MSG" | grep -q "^chore(release): bump to v"; then
+            echo "最新提交为版本号回写提交，跳过自动构建发版，防止死循环"
+            echo "should_release=false" >> $GITHUB_OUTPUT
+            echo "⏭️ 最新提交为版本号 bump 提交，已自动跳过构建" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "检测到 main 分支新代码推送，直接触发构建发版"
             echo "should_release=true" >> $GITHUB_OUTPUT
             exit 0
           fi
