@@ -11,7 +11,11 @@ export function hostPathPrefix(): string {
 }
 
 function pluginBase(): string {
-  return `${hostPathPrefix()}/api/v1/jsplugin/miot`;
+  const match = window.location.pathname.match(/^(.*\/api\/v1\/jsplugin\/[^/]+)/);
+  if (match) {
+    return match[1];
+  }
+  return `${hostPathPrefix()}/api/v1/jsplugin/miot-rf`;
 }
 
 export class ApiError extends Error {
