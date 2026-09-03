@@ -433,8 +433,18 @@ export function registerConfigHandlers(
       icon?: string;
     }
 
-    // 候选来源：其他插件经 comm 动态注册的搜索提供方（仅真实安装的才展示）
+    // 常见搜索源内置候选：解决独立插件改名后其他插件 comm.call('miot', ...) 无法送达的问题
+    const defaultKnownProviders: ProviderCandidate[] = [
+      { entryPath: 'go-music-dl', name: 'GoMusicDL', searchPath: '/api/search/topone' },
+      { entryPath: 'bili', name: '哔哩音乐', searchPath: '/api/search/topone' },
+      { entryPath: 'ytdlp', name: 'yt-dlp', searchPath: '/api/search/topone' },
+      { entryPath: 'subsonic', name: 'Subsonic', searchPath: '/api/search/topone' },
+    ];
+
     const byEntryPath = new Map<string, ProviderCandidate>();
+    for (const p of defaultKnownProviders) {
+      byEntryPath.set(p.entryPath, p);
+    }
 
     try {
       const registered = await configManager.getSearchProviders();
