@@ -33,6 +33,18 @@ const EXTERNAL_STOP_CONFIRM_COUNT = 2;
 /** 全部歌曲虚拟歌单 ID（定义为 -100，避免与临时歌单冲突） */
 export const ALL_SONGS_PLAYLIST_ID = -100;
 
+/**
+ * 外部恢复探测参数（songloft-org/songloft-plugin-miot#95）。
+ * 与 EXTERNAL_STOP_* 对称：stop 在 playing 态探测设备停止，resume 在 stopped 态探测设备恢复。
+ * 覆盖无 Web 前端连接时用户通过音箱物理按键恢复播放的场景。
+ */
+/** 探测间隔 */
+const EXTERNAL_RESUME_POLL_INTERVAL_MS = 15000;
+/** 最长探测时间，超时后放弃（设备真的关机时不必永久轮询） */
+const EXTERNAL_RESUME_POLL_MAX_MS = 600000;
+/** 连续命中"设备在播放"多少次才确认为真实恢复（与 EXTERNAL_STOP_CONFIRM_COUNT 对称） */
+const EXTERNAL_RESUME_CONFIRM_COUNT = 2;
+
 /** 判断 playlistId 是否为临时歌单（排除 ALL_SONGS_PLAYLIST_ID） */
 export function isTempPlaylistId(id: number): boolean {
   return id < 0 && id !== ALL_SONGS_PLAYLIST_ID;
@@ -113,6 +125,9 @@ export class PlaylistManager {
   private checkTimer: any = null;       // 定时器ID（基于歌曲时长的切歌定时器）
   private stopPollTimer: any = null;    // 定时器ID（后台探测外部停止，见 EXTERNAL_STOP_* 常量）
   private stopPollMisses: number = 0;   // 连续探测到设备"未在播放"的次数
+  private resumePollTimer: any = null;  // 定时器ID（后台探测外部恢复，见 EXTERNAL_RESUME_* 常量）
+  private resumePollStartedAt: number = 0;
+  private resumePollHits: number = 0;   // 连续探测到设备"在播放"的次数
   private totalSongs: number = 0;
   private playStartTimeMs: number = 0;  // 当前歌曲开始播放的时间戳(ms)
   private randomPlayed: Set<number> = new Set(); // 随机模式已播放索引
@@ -394,6 +409,7 @@ export class PlaylistManager {
     await this.forEachTarget('stop', t => this.minaService.stopPlay(t.account_id, t.device_id));
 
     songloft.log.info('[PlaylistManager] Playback stopped');
+    this.startResumePoll();
   }
 
   /**
@@ -752,6 +768,7 @@ export class PlaylistManager {
    */
   cleanup(): void {
     this.stopCheckTimer();
+    this.stopResumePoll();
   }
 
   /**
@@ -761,6 +778,7 @@ export class PlaylistManager {
    */
   prepareForNewPlayback(): void {
     this.stopCheckTimer();
+    this.stopResumePoll();
     this.clearVoiceSuspend();
     this.state = 'idle';
     this.playStartTimeMs = 0;
@@ -1323,6 +1341,7 @@ export class PlaylistManager {
    */
   private startCheckTimer(durationSec: number): void {
     this.stopCheckTimer();
+    this.stopResumePoll();
 
     const delayMs = Math.max(1, Math.floor(durationSec * 1000));
     songloft.log.info('[PlaylistManager] Timer registered delayMs=' + delayMs);
@@ -1409,6 +1428,85 @@ export class PlaylistManager {
       this.stopPollTimer = null;
     }
     this.stopPollMisses = 0;
+  }
+
+  // ===== 外部恢复探测（stopped 态检测设备恢复播放） =====
+
+  /**
+   * 外部恢复：设备端被物理按键或其他途径恢复播放，插件从 stopped 态重新接管自动切歌。
+   * 由 checkExternalResume（无 Web 前端）和 syncManagerFromDeviceState（有 Web 前端）共同调用。
+   */
+  handleExternalResume(devicePositionSec: number): void {
+    if (this.state !== 'stopped' || this.songs.length === 0) return;
+    const song = this.getCurrentSong();
+    if (!song || song.duration <= 0) return;
+
+    this.state = 'playing';
+    this.hardStopped = false;
+    this.playStartTimeMs = Date.now() - (devicePositionSec / this.playbackSpeed) * 1000;
+    const remaining = song.duration - devicePositionSec;
+    if (remaining > 0) {
+      this.startCheckTimer(remaining / this.playbackSpeed);
+    } else {
+      this.startCheckTimer(0.1);
+    }
+    songloft.log.info(`[PlaylistManager] External resume detected: position=${devicePositionSec.toFixed(1)}s remaining=${remaining.toFixed(1)}s`);
+  }
+
+  private startResumePoll(): void {
+    this.stopResumePoll();
+    if (this.songs.length === 0) return;
+    this.resumePollStartedAt = Date.now();
+    this.resumePollHits = 0;
+    this.scheduleResumePoll();
+  }
+
+  private stopResumePoll(): void {
+    if (this.resumePollTimer !== null) {
+      clearTimeout(this.resumePollTimer);
+      this.resumePollTimer = null;
+    }
+    this.resumePollStartedAt = 0;
+    this.resumePollHits = 0;
+  }
+
+  private scheduleResumePoll(): void {
+    this.resumePollTimer = setTimeout(() => {
+      this.resumePollTimer = null;
+      this.checkExternalResume().catch(e => {
+        songloft.log.warn('[PlaylistManager] checkExternalResume error: ' + String(e));
+      });
+    }, EXTERNAL_RESUME_POLL_INTERVAL_MS);
+  }
+
+  private async checkExternalResume(): Promise<void> {
+    if (this.state !== 'stopped' || this.songs.length === 0) return;
+
+    if (Date.now() - this.resumePollStartedAt > EXTERNAL_RESUME_POLL_MAX_MS) {
+      songloft.log.info('[PlaylistManager] Resume poll timed out, giving up');
+      return;
+    }
+
+    try {
+      const { status, position } = await this.minaService.getPlayState(this.accountId, this.deviceId);
+      if (this.state !== 'stopped') return;
+
+      if (status === 1) {
+        this.resumePollHits++;
+        if (this.resumePollHits >= EXTERNAL_RESUME_CONFIRM_COUNT) {
+          this.handleExternalResume(position);
+          return;
+        }
+      } else if (status >= 0) {
+        this.resumePollHits = 0;
+      }
+    } catch (e) {
+      songloft.log.warn('[PlaylistManager] checkExternalResume query failed: ' + String(e));
+    }
+
+    if (this.state === 'stopped') {
+      this.scheduleResumePoll();
+    }
   }
 
   /**

@@ -131,7 +131,8 @@ assert.match(voiceSettings, /searchText: p\.name/);
 assert.match(voiceSettings, /external_search_playlist_id"[^>]*searchable search-placeholder="搜索歌单"/);
 assert.match(mainPage, /openSelect\.value = null/);
 assert.match(mainPage, /@click="openDevicePicker"/);
-assert.match(style, /\.sl-select-wrap-open\s*\{\s*z-index: 80/);
+// wrap 不再创建层叠上下文，面板 z-index 300 直接在根层叠上下文生效（songloft-org/songloft#432）
+assert.doesNotMatch(style, /\.sl-select-wrap\b[^{]*\{[^}]*z-index/);
 assert.match(style, /\.miot-main-appbar[\s\S]*position: fixed/);
 assert.match(style, /html\.webf-engine \.miot-app \* \{ transform-origin: 0 0; \}/);
 assert.match(style, /html\.webf-engine \.player-volume-slider[^}]*transform: none/);

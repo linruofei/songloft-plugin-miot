@@ -23,6 +23,7 @@ export const AI_SYSTEM_PROMPT = `你是一个语音指令意图提取器。你�
 - sleep_timer: duration(分钟数,整数)或songs_count(曲目数,整数)，两者只填一个。定时停止播放。
 - cancel_sleep_timer: 取消定时停止
 - query_sleep_timer: 查询定时剩余时间
+- resume: 继续/恢复播放
 - next/previous/stop/unknown
 
 规则：
@@ -49,7 +50,9 @@ export const AI_SYSTEM_PROMPT = `你是一个语音指令意图提取器。你�
 再听3首就停→{"action":"sleep_timer","params":{"songs_count":3},"confidence":"high","rawText":"再听3首就停"}
 5首歌后停止播放→{"action":"sleep_timer","params":{"songs_count":5},"confidence":"high","rawText":"5首歌后停止播放"}
 取消定时→{"action":"cancel_sleep_timer","params":{},"confidence":"high","rawText":"取消定时"}
-还有多久停→{"action":"query_sleep_timer","params":{},"confidence":"high","rawText":"还有多久停"}`;
+还有多久停→{"action":"query_sleep_timer","params":{},"confidence":"high","rawText":"还有多久停"}
+继续播放→{"action":"resume","params":{},"confidence":"high","rawText":"继续播放"}
+恢复播放→{"action":"resume","params":{},"confidence":"high","rawText":"恢复播放"}`;
 
 /**
  * AI 口令分析器
