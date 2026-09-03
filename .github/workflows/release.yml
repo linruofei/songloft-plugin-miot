@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: '版本号（留空则自动生成日期版本，格式：Y.M.D）'
+        description: '版本号（留空则自动生成日期时间版本，格式：Y.M.D.HHmm）'
         required: false
         default: ''
   schedule:
@@ -91,7 +91,7 @@ jobs:
           if [ -n "${{ github.event.inputs.version }}" ]; then
             VERSION="${{ github.event.inputs.version }}"
           else
-            VERSION="$(TZ='Asia/Shanghai' date +'%Y.%-m.%-d')"
+            VERSION="$(TZ='Asia/Shanghai' date +'%Y.%-m.%-d.%H%M')"
           fi
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
           echo "Generated version: ${VERSION}"
