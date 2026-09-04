@@ -1980,6 +1980,13 @@ export class VoiceEngine {
       } catch (e) {
         songloft.log.warn('[VoiceEngine] Failed to play TTS hint: ' + String(e));
       }
+    } else {
+      // 未启用提示音时，下发极短的静音占位抢占 mibrain 语音通道，快速掐断小爱官方未命中歌单等回复
+      try {
+        await this.minaService.textToSpeech(accountId, deviceId, '。');
+      } catch (e) {
+        songloft.log.warn('[VoiceEngine] TTS silence placeholder failed: ' + String(e));
+      }
     }
   }
 
