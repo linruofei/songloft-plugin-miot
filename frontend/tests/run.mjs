@@ -174,15 +174,37 @@ assert.match(mainPage, /miot-page-with-player/);
 assert.match(style, /--miot-list-height: clamp\(240px, calc\(100vh - 254px\), 720px\)/);
 assert.match(style, /\.sl-list-view\s*\{[^}]*height: var\(--miot-list-height\)/);
 assert.match(slListView, /class="sl-list-view sl-list-view-html"/);
-assert.doesNotMatch(slListView, /webf-list-view/);
 assert.doesNotMatch(mainPage, /:height="'var\(--miot-list-height\)'"/);
-assert.match(mainPage, /songRenderLimit = ref\(20\)/);
-assert.match(mainPage, /visibleSongs\.value\.slice\(0, songRenderLimit\.value\)/);
-assert.match(mainPage, /songRenderLimit\.value = Math\.min\(songRenderLimit\.value \+ songRenderBatchSize/);
-// #374 回归测试：定位当前播放歌曲前必须校验 WebF 是否已完成布局（否则 scrollTop 会被计算成 0，
+
+// #96 回归测试：歌曲列表必须是定高双向虚拟列表。
+// 以前整份歌单一次性渲染，1900 首就是 1900 个 SongRow + 1900 个封面请求排在 3 个并发槽后面，
+// 表现为“点定位卡好久、封面全空白、拖动很卡”。原生 webf-list-view 的懒构建只省 Flutter 侧绘制，
+// 这些开销全在 JS 侧照付，所以必须在 JS 侧就只渲染窗口内的行。
+assert.match(mainPage, /renderedSongs = computed\(\(\) => visibleSongs\.value\.slice\(windowStart\.value, windowEnd\.value\)\)/);
+assert.match(mainPage, /leadSpacerHeight = computed\(\(\) => windowStart\.value \* rowHeight\.value\)/);
+assert.match(mainPage, /tailSpacerHeight = computed\(\(\) => Math\.max\(0, \(totalSongs\.value - windowEnd\.value\) \* rowHeight\.value\)\)/);
+// 行号必须是歌单里的绝对序号，不能是窗口内的下标（否则序号和播放的都是错的那首）。
+assert.match(mainPage, /:index="windowStart \+ index"/);
+// 占位条常驻（高度可为 0）：摘掉会让原生 ListView 的子节点索引整体错位。
+assert.match(mainPage, /class="song-list-spacer" :style="\{ height: `\$\{leadSpacerHeight\}px` \}"/);
+assert.match(mainPage, /class="song-list-spacer" :style="\{ height: `\$\{tailSpacerHeight\}px` \}"/);
+// 占位条按“行号 × 行高”算，所以行高必须是精确值，不能只给 min-height。
+assert.match(style, /\.song-row \{[^}]*height: var\(--miot-row-height\)/);
+assert.doesNotMatch(style, /\.song-row \{[^}]*min-height: var\(--miot-row-height\)/);
+// 原生列表也要绑 @scroll：WebF 只在挂了监听器时才派发 DOM scroll，不绑窗口就永不推进。
+assert.match(slListView, /<webf-list-view[\s\S]*?@scroll="emit\('scroll', \$event\)"/);
+// 事件不来的客户端上还要有轮询兜底，否则往下滚全是空白，比不虚拟化更糟。
+assert.match(mainPage, /windowPollTimer = setInterval/);
+assert.match(mainPage, /clearInterval\(windowPollTimer\)/);
+// #374 回归测试：定位当前播放歌曲前必须校验 WebF 是否已完成布局（否则 scrollTop 会被算成 0，
 // 表现为“定位功能始终回第一屏”），不允许在拿到零尺寸测量值时直接应用 scrollTop。
-assert.match(mainPage, /rowRect\.height <= 0 \|\| list\.clientHeight <= 0/);
-assert.match(mainPage, /locateTimer = setTimeout\(\(\) => scrollToCurrentSong\(attempt \+ 1\)/);
+// 现在改成定高换算，判据也从“行的尺寸”变成“可视区高度 + 写入后 scrollTop 是否真落到位”。
+assert.match(mainPage, /const viewport = list\.clientHeight\(\);\s*\n\s*if \(viewport <= 0\) \{/);
+assert.match(mainPage, /locateTimer = setTimeout\(\(\) => scrollToIndex\(index, attempt \+ 1\)/);
+assert.match(mainPage, /if \(Math\.abs\(list\.scrollTop\(\) - target\) > rowHeight\.value\) scrollToIndex\(index, attempt \+ 1\)/);
+// 封面并发槽必须有兜底归还：WebF 存在 load/error 都不发的情况，漏满 3 个槽后列表封面永久空白。
+assert.match(songRow, /COVER_SLOT_WATCHDOG_MS/);
+assert.match(songRow, /coverWatchdog = setTimeout/);
 assert.match(slListView, /defineEmits<\{ scroll/);
 assert.match(style, /\.player-bar-shell[\s\S]*position: fixed/);
 assert.match(style, /\.song-cover[^}]*width: 48px[^}]*height: 48px/);
@@ -315,9 +337,13 @@ assert.match(sleepTimerPopup, /status\.active \? 'alarm_on' : 'alarm'/);
 assert.match(sleepTimerPopup, /choose\('time', 15\)/);
 assert.match(sleepTimerPopup, /choose\('songs', 5\)/);
 assert.match(style, /\.player-sleep-popup[^}]*width: 280px[^}]*max-width: calc\(100vw - 32px\)/);
-// PlayerBar 工具区弹层右对齐，防止右侧溢出视口（#388）
-assert.match(style, /\.player-bar-tools \.player-sleep-popup \{ left: auto; right: 0; transform: none; \}/);
-assert.match(style, /html\.webf-engine \.player-bar-tools \.player-sleep-popup \{ left: auto; right: 0; \}/);
+// PlayerBar 工具区弹层右对齐，防止右侧溢出视口（#388）。
+// 这件事已从 CSS override 迁到 positionPopup() 里算 fixed 坐标（弹层要脱离
+// .player-popup-anchor 的堆叠上下文，否则 WebF 下遮罩会压住弹层），所以断言落在
+// 那段钳制逻辑上：工具区按 right 对齐，其余居中，两者都不许越过 edgeInset。
+assert.match(sleepTimerPopup, /const isBarTools = el\.closest\('\.player-bar-tools'\) !== null/);
+assert.match(sleepTimerPopup, /isBarTools\s*\n?\s*\? Math\.max\(edgeInset, rect\.right - maxWidth\)/);
+assert.match(sleepTimerPopup, /window\.innerWidth - maxWidth - edgeInset/);
 // WebF 下遮罩必须与弹层同一个挂载父级，否则透明遮罩会压住整个弹层、弹层内一切都点不到。
 // WebF 按包含块挂载 widget：fixed 挂到 <html>，absolute 留在最近的定位祖先里，于是
 // 遮罩的 z-index 231 在 <html> 层排序，而弹层的 232 只在 .player-popup-anchor 内有效，
@@ -368,7 +394,11 @@ assert.match(iconFont, /String\.fromCodePoint\(0xe88e\)/);
 assert.match(iconFont, /String\.fromCodePoint\(0xe25b\)/);
 assert.match(slIcon, /:key="iconFontEpoch"/);
 assert.match(slIcon, /iconFontReady\.value/);
-assert.match(mainEntry, /installIconFontWatch\(\);\s*\n\s*\ncreateApp\(App\)/);
+// 图标字体探针必须在 mount 之前装：它要抢到 WebF 字体懒加载的「第一个请求者」位置。
+// 只断言「在 createApp 之前」，不断言紧邻——中间已经多了一个
+// installListCoverVisibilityRecovery()，日后还会有别的 install*。
+assert.match(mainEntry, /installIconFontWatch\(\);[\s\S]*createApp\(App\)/);
+assert.doesNotMatch(mainEntry, /createApp\(App\)[\s\S]*installIconFontWatch\(\)/);
 assert.match(nativeProps, /export function bindNativeAttrs/);
 assert.match(nativeProps, /removeAttribute\(key\)/);
 assert.match(sliderComponent, /bindNativeAttrs\(native/);

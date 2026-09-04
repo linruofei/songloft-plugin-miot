@@ -10,20 +10,115 @@ import SlInput from '../ui/SlInput.vue';
 import SlListView from '../ui/SlListView.vue';
 import SlSelect from '../ui/SlSelect.vue';
 import { openSelect } from '../ui/selectState';
-import { navigation, openPage, useNativeList } from '../runtime';
+import { navigation, openPage } from '../runtime';
 import { currentDevice, deviceName, messageOf, playlistLabel, playSong, refreshAll, selectPlaylist, state, visibleSongs } from '../store';
 import type { SelectOption, Song } from '../types';
 
 const search = ref('');
-const songRenderLimit = ref(20);
-const songRenderBatchSize = 40;
 const playlistOptions = computed<SelectOption[]>(() => state.playlists.map((p) => ({ value: String(p.id), label: playlistLabel(p), searchText: p.name })));
-const renderedSongs = computed(() => useNativeList ? visibleSongs.value : visibleSongs.value.slice(0, songRenderLimit.value));
 const noServerHint = computed(() => !state.config.server_host || state.config.server_host_status === 'loopback');
 const listMeasureRetries = 6;
 let listMeasureTimer: ReturnType<typeof setTimeout> | null = null;
 let locateTimer: ReturnType<typeof setTimeout> | null = null;
 let mounted = false;
+
+// ===== 双向虚拟列表 =====
+//
+// 为什么必须虚拟化（songloft-org/songloft-plugin-miot#96）：以前整份歌单一次性渲染，
+// 1900 首歌就是 1900 个 SongRow 组件、1900 个封面防抖定时器、1900 个排队的封面请求。
+// 原生 `webf-list-view` 的懒构建只省下 Flutter 侧的绘制，这些开销全在 JS 侧照付，
+// 于是「点定位卡好久 → 封面全空白 → 拖动很卡」：3 个并发封面槽被约 1900 个屏外行占满，
+// 可见行永远排不上队。
+//
+// 做法是标准的定高窗口：只渲染 `[windowStart, windowEnd)`，上下各放一个占位条把未渲染
+// 行的高度补齐，滚动条长度与真实列表一致，`scrollTop` 也保持原义（可以直接用
+// `行号 × 行高` 换算），因此定位不再依赖 getBoundingClientRect 那套异步布局竞态。
+/** 窗口在可视区之外上下各多渲染的行数，用来吸收滚动与重渲染之间的延迟。 */
+const WINDOW_BUFFER_ROWS = 12;
+/** 窗口起点漂移达到多少行才重渲染。太小则滚动时每帧都 patch，太大则来不及补空白。 */
+const WINDOW_STEP_ROWS = 4;
+
+const listRef = ref<InstanceType<typeof SlListView> | null>(null);
+/** 行高（px），见 calibrateRowHeight：挂载时校准一次，之后每次量列表高度时再校准。 */
+const rowHeight = ref(64);
+/** 列表可视区高度（px），由 measureListHeight 写入。 */
+const listHeight = ref(0);
+/** 窗口起点的「意向值」，真正生效的是下面 clamp 过的 windowStart。 */
+const rawWindowStart = ref(0);
+
+const totalSongs = computed(() => visibleSongs.value.length);
+const windowRows = computed(() => {
+  const visible = rowHeight.value > 0 ? Math.ceil(listHeight.value / rowHeight.value) : 0;
+  return Math.max(8, visible + WINDOW_BUFFER_ROWS * 2);
+});
+const windowStart = computed(() => {
+  const maxStart = Math.max(0, totalSongs.value - windowRows.value);
+  return Math.max(0, Math.min(rawWindowStart.value, maxStart));
+});
+const windowEnd = computed(() => Math.min(totalSongs.value, windowStart.value + windowRows.value));
+const renderedSongs = computed(() => visibleSongs.value.slice(windowStart.value, windowEnd.value));
+const leadSpacerHeight = computed(() => windowStart.value * rowHeight.value);
+const tailSpacerHeight = computed(() => Math.max(0, (totalSongs.value - windowEnd.value) * rowHeight.value));
+
+/**
+ * 窗口位置的轮询兜底。
+ *
+ * 主路径是 `@scroll`，实测在真实 WebF 上是可靠的（`div.sl-list-view-html` 分支）。留这一路
+ * 是因为失败代价不对称：事件万一不来，窗口就永不推进、往下滚全是空白，比不虚拟化更糟；
+ * 而轮询的代价只是每 120ms 读一次 `scrollTop` 加几步算术。WebF 的 `_dispatchScrollEvent`
+ * 只在挂了监听器时才派发，不同客户端版本上的行为不必然一致，所以不赌它。
+ */
+const WINDOW_POLL_MS = 120;
+let windowPollTimer: ReturnType<typeof setInterval> | null = null;
+/** 定位期间的静默期（时间戳）：这段时间内不让轮询把窗口拽回旧位置。 */
+let locateGuardUntilMs = 0;
+
+function startWindowPoll(): void {
+  if (windowPollTimer) return;
+  windowPollTimer = setInterval(() => {
+    if (!mounted || !listRef.value) return;
+    if (Date.now() < locateGuardUntilMs) return;
+    syncWindowToScroll(listRef.value.scrollTop());
+  }, WINDOW_POLL_MS);
+}
+
+/**
+ * 校准行高。
+ *
+ * 三级取值：真实渲染出来的行 > CSS 变量 > 默认 64。
+ * 以真实行优先是因为整套换算的误差会被行号放大——行高差 1px，滚到第 1900 行就偏出约
+ * 2000px（三十屏）。而前两级都可能拿不到：WebF 对自定义属性的 getComputedStyle 不保证
+ * 有返回值，列表还没渲染时也量不到行。拿不到就退回上一级，绝不会写入 0。
+ */
+function calibrateRowHeight(): void {
+  const row = document.querySelector<HTMLElement>('.song-row');
+  const measured = row ? row.getBoundingClientRect().height : 0;
+  if (measured > 0) {
+    rowHeight.value = measured;
+    return;
+  }
+  const parsed = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--miot-row-height'));
+  if (parsed > 0) rowHeight.value = parsed;
+}
+
+/** 按当前滚动位置推进窗口。漂移不足 WINDOW_STEP_ROWS 行时不动，避免滚动中反复重渲染。 */
+function syncWindowToScroll(top: number): void {
+  const desired = Math.max(0, Math.floor(top / rowHeight.value) - WINDOW_BUFFER_ROWS);
+  if (Math.abs(desired - rawWindowStart.value) >= WINDOW_STEP_ROWS) rawWindowStart.value = desired;
+}
+
+function onListScroll(event: Event): void {
+  const target = event.currentTarget as HTMLElement | null;
+  const top = target && typeof target.scrollTop === 'number' ? target.scrollTop : (listRef.value?.scrollTop() ?? 0);
+  syncWindowToScroll(top);
+}
+
+function resetSongWindow(): void {
+  rawWindowStart.value = 0;
+  // 回到顶部这段时间同样不能让轮询按旧 scrollTop 反推窗口。
+  locateGuardUntilMs = Date.now() + 400;
+  void nextTick(() => listRef.value?.setScrollTop(0));
+}
 
 function measureListHeight(attempt = 0): void {
   if (!mounted) return;
@@ -44,7 +139,12 @@ function measureListHeight(attempt = 0): void {
     listBottom = window.innerHeight - padBottom;
   }
   if (list && listTop > 0 && listBottom > listTop) {
-    list.style.height = `${Math.max(128, Math.round(listBottom - listTop))}px`;
+    const height = Math.max(128, Math.round(listBottom - listTop));
+    list.style.height = `${height}px`;
+    // 窗口大小按可视区行数算，所以量到高度后要同步给虚拟列表。
+    // 行也已经布局完了，顺便校准行高（这条重试阶梯本来就是等 WebF 布局的）。
+    listHeight.value = height;
+    calibrateRowHeight();
     return;
   }
   if (attempt < listMeasureRetries) {
@@ -58,15 +158,6 @@ function remeasureList(): void {
 }
 
 async function onPlaylist(value: string) { await selectPlaylist(value); }
-function resetSongRenderLimit(): void { if (!useNativeList) songRenderLimit.value = 20; }
-function loadMoreSongs(event: Event): void {
-  if (useNativeList) return;
-  const target = event.currentTarget as HTMLElement | null;
-  if (!target || songRenderLimit.value >= visibleSongs.value.length) return;
-  if (target.scrollTop + target.clientHeight >= target.scrollHeight - 160) {
-    songRenderLimit.value = Math.min(songRenderLimit.value + songRenderBatchSize, visibleSongs.value.length);
-  }
-}
 function openDevicePicker() {
   openSelect.value = null;
   navigation.devicePickerOpen = true;
@@ -75,45 +166,66 @@ async function play(song: Song, index: number) {
   try { await playSong(song, index); } catch (error) { /* store already presents the error */ notifyLocal(error); }
 }
 function notifyLocal(error: unknown) { console.warn('[miot] play failed', messageOf(error)); }
-function scrollToCurrentSong(attempt = 0): void {
+/**
+ * 滚到指定行并居中。
+ *
+ * 行是定高的，所以目标位置就是 `index × 行高`，不再需要旧写法那套
+ * 「等新行布局完 → 量 getBoundingClientRect → 相对位移」——那套在 WebF 上要跟异步布局
+ * 赛跑，量到零尺寸就把 scrollTop 冲成 0（表现为"定位跳回第一屏"）。
+ *
+ * 仍要重试，但重试的判据变成「写进去的 scrollTop 生效了没有」：WebF 的滚动范围要等
+ * Flutter 侧布局完占位条才成立，在那之前写入会被钳掉。
+ */
+function scrollToIndex(index: number, attempt = 0): void {
   if (!mounted) return;
-  const list = document.querySelector<HTMLElement>('.sl-list-view');
-  const row = document.querySelector<HTMLElement>('.song-row-current');
-  if (!list || !row) return;
-  const listRect = list.getBoundingClientRect();
-  const rowRect = row.getBoundingClientRect();
-  // WebF 布局是异步的：nextTick 只保证 Vue patch 完成，新插入的行此刻可能仍是零尺寸，
-  // 直接拿零值计算会把 scrollTop 冲到负值（被钳制为 0），表现为"始终跳回第一屏"。
-  if (rowRect.height <= 0 || list.clientHeight <= 0) {
-    if (attempt < listMeasureRetries) locateTimer = setTimeout(() => scrollToCurrentSong(attempt + 1), 32 * (attempt + 1));
+  const list = listRef.value;
+  if (!list) return;
+  const viewport = list.clientHeight();
+  if (viewport <= 0) {
+    if (attempt < listMeasureRetries) locateTimer = setTimeout(() => scrollToIndex(index, attempt + 1), 32 * (attempt + 1));
     return;
   }
-  list.scrollTop += rowRect.top - listRect.top - (list.clientHeight - rowRect.height) / 2;
+  const target = Math.max(0, index * rowHeight.value - (viewport - rowHeight.value) / 2);
+  // 先把窗口挪到目标位置再滚：否则滚过去时那一段还没渲染，会先看到一屏空白。
+  rawWindowStart.value = Math.max(0, Math.floor(target / rowHeight.value) - WINDOW_BUFFER_ROWS);
+  // scrollTop 真正落到 target 之前，轮询读到的还是旧位置，会把窗口拽回去。
+  locateGuardUntilMs = Date.now() + 400;
+  void nextTick(() => {
+    list.setScrollTop(target);
+    if (attempt >= listMeasureRetries) return;
+    locateTimer = setTimeout(() => {
+      // 容一行的误差：末尾几行滚不到正中是正常的（已经到底了）。
+      if (Math.abs(list.scrollTop() - target) > rowHeight.value) scrollToIndex(index, attempt + 1);
+    }, 48);
+  });
 }
 function locateCurrentSong() {
   const currentIndex = visibleSongs.value.findIndex((song) => song.id === state.player.current_song?.id);
   if (currentIndex < 0) return;
-  if (!useNativeList && currentIndex >= songRenderLimit.value) {
-    songRenderLimit.value = Math.min(currentIndex + songRenderBatchSize, visibleSongs.value.length);
-  }
   if (locateTimer) clearTimeout(locateTimer);
-  void nextTick(() => scrollToCurrentSong());
+  scrollToIndex(currentIndex);
 }
-watch(() => [state.selectedPlaylistId, state.songSearch], resetSongRenderLimit);
+watch(() => [state.selectedPlaylistId, state.songSearch], resetSongWindow);
 watch(
   () => [state.selectedPlaylistId, state.songsLoading, state.songsError, visibleSongs.value.length, !!currentDevice.value, noServerHint.value],
   remeasureList,
 );
 onMounted(() => {
   mounted = true;
+  calibrateRowHeight();
   window.addEventListener('resize', remeasureList);
   remeasureList();
+  startWindowPoll();
 });
 onUnmounted(() => {
   mounted = false;
   window.removeEventListener('resize', remeasureList);
   if (listMeasureTimer) clearTimeout(listMeasureTimer);
   if (locateTimer) clearTimeout(locateTimer);
+  if (windowPollTimer) {
+    clearInterval(windowPollTimer);
+    windowPollTimer = null;
+  }
 });
 </script>
 
@@ -151,9 +263,13 @@ onUnmounted(() => {
       <SlButton variant="icon" icon="my_location" title="定位当前播放" @click="locateCurrentSong" />
     </div>
 
-    <SlListView v-if="state.selectedPlaylistId && !state.songsLoading && !state.songsError" aria-label="歌曲列表" @scroll="loadMoreSongs">
-      <SongRow v-for="(song, index) in renderedSongs" :key="song.id" :song="song" :index="index" @play="play" />
-      <div v-if="visibleSongs.length === 0" class="song-list-empty">没有匹配的歌曲</div>
+    <!-- 虚拟列表：两个占位条常驻（高度为 0 时也不摘掉），保持列表子节点结构稳定，
+         避免窗口滑动时原生 ListView 的子节点索引整体错位。 -->
+    <SlListView v-if="state.selectedPlaylistId && !state.songsLoading && !state.songsError" ref="listRef" aria-label="歌曲列表" @scroll="onListScroll">
+      <div class="song-list-spacer" :style="{ height: `${leadSpacerHeight}px` }"></div>
+      <SongRow v-for="(song, index) in renderedSongs" :key="song.id" :song="song" :index="windowStart + index" @play="play" />
+      <div class="song-list-spacer" :style="{ height: `${tailSpacerHeight}px` }"></div>
+      <div v-if="totalSongs === 0" class="song-list-empty">没有匹配的歌曲</div>
     </SlListView>
     <div v-else-if="state.songsLoading" class="song-list-empty"><span class="loading-spinner"></span><span>正在加载歌曲</span></div>
     <div v-else-if="state.songsError" class="song-list-empty"><span>{{ state.songsError }}</span><SlButton variant="text" label="重试" @click="selectPlaylist(state.selectedPlaylistId)" /></div>

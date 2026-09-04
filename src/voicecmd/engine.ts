@@ -1894,7 +1894,9 @@ export class VoiceEngine {
     const pollInterval = 2000;
     const startTime = Date.now();
     let deviceBecameIdle = false;
+    let deviceTakenOver = false;
     let lastDevicePosition = 0;
+    let takenOverDuration = 0;
 
     while (Date.now() - startTime < maxWaitMs) {
       if (!pm.isPlaying() || this.resumeCancelled) return;
@@ -1904,12 +1906,33 @@ export class VoiceEngine {
         deviceBecameIdle = true;
         break;
       }
+      // status=1 只说明音箱在响。小爱可能已经用 REPLACE_ALL 把播放项换成它自己的内容，
+      // 此时既不能把它的进度当成我们歌的进度，也不能靠裸 play 续回来——只能重推 URL
+      // （songloft-org/songloft-plugin-miot#96）。
+      if (pm.matchDeviceStream(deviceStatus) === 'foreign') {
+        deviceTakenOver = true;
+        takenOverDuration = deviceStatus.duration;
+        break;
+      }
       lastDevicePosition = deviceStatus.position;
 
       await new Promise(r => setTimeout(r, pollInterval));
     }
 
     if (!pm.isPlaying() || this.resumeCancelled) return;
+
+    if (deviceTakenOver) {
+      // 设备在放别的媒体：位置只能用本地挂钟推算（设备上报的是小爱内容的进度，不能用）。
+      // 挂起期间 playStartTimeMs 没被动过，getPosition() 仍是可用的估算值。
+      const replayFrom = pm.getPosition();
+      songloft.log.warn(`[VoiceEngine] Speaker taken over by assistant (deviceDuration=${takenOverDuration}s), re-pushing our URL seek=${replayFrom.toFixed(1)}s`);
+      const ok = await pm.replayCurrent(replayFrom);
+      if (!ok) {
+        songloft.log.warn('[VoiceEngine] Failed to re-push URL after speaker takeover');
+        await pm.stop();
+      }
+      return;
+    }
 
     if (!deviceBecameIdle) {
       // 超时退出：设备一直在播放，说明已自动恢复，仅重置切歌定时器

@@ -200,6 +200,22 @@ async function onDeinit(): Promise<void> {
   songloft.log.info('MIoT 智能音箱插件已停止');
 }
 
+// 后端热重载（自动更新）前的忙碌探测：正在播放时返回 busy，让后端把重载推迟到空闲，
+// 避免自动更新在播放中途打断播放。手动更新不受影响，仍然立即重载。
+//
+// 必须返回 JSON **字符串**：宿主的 ExecuteJS 用 fmt.Sprintf("%v") 字符串化返回值，
+// 直接返回对象会变成 Go 的 map 文本（map[busy:true ...]），后端解析不出来。
+async function onQueryBusy(): Promise<string> {
+  try {
+    const reason = playlistManagerMap?.busyReason() ?? '';
+    return JSON.stringify({ busy: reason !== '', reason });
+  } catch (e) {
+    // 探测本身出错时按空闲处理，不能因为探测失败就永久阻塞更新
+    songloft.log.warn('[onQueryBusy] 忙碌探测失败，按空闲处理: ' + String(e));
+    return JSON.stringify({ busy: false, reason: '' });
+  }
+}
+
 async function onHTTPRequest(req: HTTPRequest): Promise<HTTPResponse> {
   return await router.handle(req);
 }
@@ -220,5 +236,6 @@ async function onWebSocket(req: WebSocketRequest, socket: InboundWebSocket): Pro
 // 暴露为全局（QuickJS 需要显式声明）。SDK 0.8+ 已正式支持 async 签名。
 globalThis.onInit = onInit;
 globalThis.onDeinit = onDeinit;
+globalThis.onQueryBusy = onQueryBusy;
 globalThis.onHTTPRequest = onHTTPRequest;
 globalThis.onWebSocket = onWebSocket;

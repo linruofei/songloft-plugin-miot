@@ -382,11 +382,16 @@ export class MinaService {
    * 带 seek/倍速的流要换算成曲内绝对位置：流内偏移 × getPlaybackSpeed() + getStreamSeekOffsetSec()
    * （speed=1 时退化为只加 seekOffset）。设备不上报 play_song_detail 时 position 退化为 0
    * （此时别拿它当「真在开头」用）。
+   *
+   * duration 是设备当前媒体的**流长**（秒，0 = 未上报），用于判断音箱在放的到底是不是
+   * 我们推的那条流：status=1 只说明音箱在响，小爱接管播它自己的内容时同样是 1
+   * （见 PlaylistManager.matchDeviceStream，songloft-org/songloft-plugin-miot#96）。
    */
-  async getPlayState(accountId: string, deviceId: string): Promise<{ status: number; position: number }> {
+  async getPlayState(accountId: string, deviceId: string): Promise<{ status: number; position: number; duration: number }> {
     const raw = await this.getPlayerStatus(accountId, deviceId);
     let status = -1;
     let position = 0;
+    let duration = 0;
     const info = (raw?.data as any)?.info;
     if (typeof info === 'string') {
       try {
@@ -395,9 +400,12 @@ export class MinaService {
         if (parsed.play_song_detail && typeof parsed.play_song_detail.position === 'number') {
           position = Math.floor(parsed.play_song_detail.position / 1000);
         }
+        if (parsed.play_song_detail && typeof parsed.play_song_detail.duration === 'number') {
+          duration = Math.floor(parsed.play_song_detail.duration / 1000);
+        }
       } catch {}
     }
-    return { status, position };
+    return { status, position, duration };
   }
 
   // ===== 内部辅助方法 =====

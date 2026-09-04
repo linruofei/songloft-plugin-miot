@@ -188,7 +188,13 @@ html.webf-engine .miot-app * { transform-origin: 0 0; }
 .search-bar { display: flex; align-items: center; gap: 8px; height: 48px; margin-bottom: 12px; padding: 0 12px; border: 1px solid var(--md-outline-variant); border-radius: var(--md-radius-full); background: var(--md-surface-container-low); color: var(--md-on-surface-variant); }
 .search-bar input, .search-bar .sl-input-native { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; color: var(--md-on-surface); }
 .song-list-empty { min-height: 220px; display: flex; align-items: center; justify-content: center; color: var(--md-on-surface-variant); text-align: center; }
-.song-row { min-height: var(--miot-row-height); display: flex; align-items: center; gap: 12px; padding: 8px 8px; border-bottom: 1px solid var(--md-outline-variant); cursor: pointer; }
+/* 行高必须**精确**等于 --miot-row-height，不能只给 min-height：MainPage 的虚拟列表
+   靠 `行号 × 行高` 算占位条高度和 scrollTop，行高哪怕差 1px，滚到第 1900 行也会偏出
+   十几屏（songloft-org/songloft-plugin-miot#96）。box-sizing 是全局 border-box，
+   所以 64px 已含 7px×2 内边距与 1px 下边框，内容区 49px 正好放得下 48px 封面。 */
+.song-row { height: var(--miot-row-height); display: flex; align-items: center; gap: 12px; padding: 7px 8px; border-bottom: 1px solid var(--md-outline-variant); cursor: pointer; }
+/* 虚拟列表上下占位条：撑出未渲染行的高度，让滚动条长度和真实列表一致。 */
+.song-list-spacer { flex: 0 0 auto; width: 100%; }
 .song-row-button { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; border: 0; padding: 0; margin: 0; background: transparent; color: inherit; font: inherit; text-align: inherit; cursor: pointer; outline: none; -webkit-tap-highlight-color: transparent; }
 .song-row:hover { background: var(--md-surface-container-low); }
 .song-row-current { background: var(--md-secondary-container); color: var(--md-on-secondary-container); }
