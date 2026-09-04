@@ -9,12 +9,19 @@ const emit = defineEmits<{ scroll: [Event] }>();
  * 滚动位置的读写与 `@scroll` 事件，供 MainPage 的虚拟列表定位窗口用。
  *
  * 原生分支也绑 `@scroll`：WebF 的 `handleScroll` 只在**挂了监听器**时才派发 DOM `scroll`
- * （`_dispatchScrollEvent`），不绑就永远收不到。`scrollTop` 读写按源码应当可用
- * （`WebFListViewElement` 覆写 `scrollControllerY`，`ElementOverflowMixin` 的 `scrollTop`
- * 读写都走它），但**这条分支目前跑不到、因此未经实测**：`runtime.ts` 的
- * `hasNativeElement()` 用 `property in el` 探测，而 WebF 的绑定属性取值拿得到、`in` 却
- * 返回 false，于是 `useNativeList` 在 WebF 下恒为 false，实际渲染的一直是下面那个
- * `div.sl-list-view-html`（已在真实 WebF 里逐项验证）。哪天探测修好了再回来实测原生分支。
+ * （`_dispatchScrollEvent`），不绑就永远收不到。
+ *
+ * 实测结论（WebF 0.24.27，真实 miot 构建产物 + 假后端 2000 首歌，#97 修复后首次跑通）：
+ *  - 渲染的是 `<webf-list-view>`（非 `div.sl-list-view-html`），`clientHeight` 读得到
+ *    （442px），首尾 spacer 与虚拟窗口协同正常（`0px,126016px` ≈ (2000−31)×64）。
+ *  - `scrollTop` **读**：实时返回数值，绑定是活的。
+ *  - `@scroll` **派发**：写入触发的滚动事件被监听器收到（计数 0→1→2）。
+ *  - `scrollTop` **写**：写入后视口确实移动、spacer 重平衡、首行变化（写 32000→
+ *    视口下移到第 11 行 / top spacer 变 640px；写 0→回到顶部）。但**写入落点与请求值
+ *    不一致**：请求 32000px 实际只滚到 ~640px，且回读值（1439/640）与可见偏移对不上，
+ *    疑似 WebF `scrollTop` 绑定的单位/异步落点问题。这不影响 #97（本修复只纠正探测让
+ *    原生分支得以启用），但建议另开 issue 复核 `MainPage.scrollToIndex` 在原生列表下的
+ *    落点精度（其 120ms 轮询 + 重试兜底可能掩盖了该问题）。
  */
 const root = ref<HTMLElement | null>(null);
 

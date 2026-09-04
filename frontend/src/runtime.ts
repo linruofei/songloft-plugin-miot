@@ -3,18 +3,89 @@ import { resolveConfirm, state } from './store';
 
 export const isWebFRuntime = typeof window !== 'undefined' && !!window.webf;
 
-function hasNativeElement(tagName: string, property: string): boolean {
+/**
+ * 探测某个原生元素在当前 WebF 里**真的可用**（songloft-org/songloft-plugin-miot#97）。
+ *
+ * ── 为什么不能用 `property in el` ──────────────────────────────────────────
+ *
+ * WebF 的绑定成员由 C++/QuickJS 侧的方法表在**取值**时解析，`in`（has_property）
+ * 走不到那张表。webf 0.24.27 桌面探针实测（挂载前后一致）：
+ *
+ * | 标签 / 成员                          | `in`  | `typeof` |
+ * |--------------------------------------|-------|----------|
+ * | `webf-list-view` / `finishLoad`      | false | function |
+ * | `flutter-cupertino-switch` / `checked` | false | boolean  |
+ *
+ * 所以旧写法让 `useNativeUI` / `useNativeList` 在 WebF 下**恒为 false** ——
+ * 原生 Cupertino 控件与原生列表从未启用过。反方向同样错：`'value' in el` 对
+ * **任何** WebF 元素都为 true（连未注册的标签也是），旧的 `useNativeSlider`
+ * 因此是个假阳性，碰巧结论对而理由错。
+ *
+ * ── 两类元素、两条判据（都在真实 WebF 上逐条实测过）───────────────────────
+ *
+ * ① webf 内建元素与 `webf_cupertino_ui` 元素**有绑定成员**：直接 `typeof`
+ *    取一个该元素独有的成员。未注册标签上它是 `undefined`（实测，且不会挂）。
+ * ② `<songloft-slider>` 这类宿主 Dart 侧自定义元素**一个绑定成员都没有**
+ *    （整个元素只读 attribute），见 [nativeDisplayProbe]。
+ */
+function nativeMemberProbe(tagName: string, member: string): boolean {
   if (!isWebFRuntime) return false;
   try {
-    return property in document.createElement(tagName);
+    const element = document.createElement(tagName) as unknown as Record<string, unknown>;
+    return typeof element[member] !== 'undefined';
   } catch {
     return false;
   }
 }
 
-export const useNativeUI = hasNativeElement('flutter-cupertino-switch', 'checked');
-export const useNativeList = hasNativeElement('webf-list-view', 'finishLoad');
-export const useNativeSlider = hasNativeElement('songloft-slider', 'value');
+/**
+ * 靠 `defaultStyle` 探测宿主 Dart 侧自定义元素是否已注册。
+ *
+ * `<songloft-slider>` 在 JS 侧与一个**未注册**的带连字符标签几乎无法区分，实测：
+ *   - `Object.prototype.toString.call(el)` 两者都是 `[object WidgetElement]`；
+ *   - `typeof el[任意成员]` 两者都是 `undefined`（它没有绑定成员可探）；
+ *   - **`Object.getOwnPropertyNames(el)` 在未注册标签上会把 JS 线程挂死** ——
+ *     实测表现是打完上一行日志后整页再无任何输出。它对已注册的 widget 元素能
+ *     列出完整绑定表（很诱人），但绝不能用来做探测。
+ *
+ * 唯一可用的差异是元素自己声明的 `defaultStyle`：已注册的 `<songloft-slider>`
+ * 是 `inline-block`（`songloft_slider.dart` 的 `defaultStyle`），未注册标签落到
+ * WebF 的 `_UnknownHTMLElement`，那是 `block`。
+ *
+ * 两个必须遵守的前提：
+ *   - **必须真的挂进文档**：游离态两者都是 `inline`，读不到 defaultStyle
+ *     （WebF 只在 `applyStyle` 时套 defaultStyle，而那要求已挂载）。
+ *     `display` 是**样式**不是布局，`getComputedStyle` 内部会同步 flush 样式，
+ *     所以不用等帧，也不能改成读 `offsetHeight`（那个要等 Flutter 布局）。
+ *   - **探测元素不带 class**，且页面 CSS 里没有针对裸 `songloft-slider` 标签的
+ *     `display` 规则（已核对 theme.css / components.css / webf-shims.css /
+ *     本插件 style.css）。哪天谁加了这样一条规则，这条探测会静默失效。
+ */
+function nativeDisplayProbe(tagName: string, expected: string): boolean {
+  if (!isWebFRuntime || !document.body) return false;
+  let host: HTMLElement | null = null;
+  try {
+    host = document.createElement('div');
+    host.setAttribute('style', 'position:absolute;left:-9999px;top:0;width:0;height:0;overflow:hidden;');
+    const probe = document.createElement(tagName);
+    host.appendChild(probe);
+    document.body.appendChild(host);
+    return window.getComputedStyle(probe).display === expected;
+  } catch {
+    return false;
+  } finally {
+    // 摘不掉也不能影响判定：留一个 0×0 的屏外空盒子，代价远小于抛错。
+    try {
+      if (host && host.parentNode) host.parentNode.removeChild(host);
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+export const useNativeUI = nativeMemberProbe('flutter-cupertino-switch', 'checked');
+export const useNativeList = nativeMemberProbe('webf-list-view', 'finishLoad');
+export const useNativeSlider = nativeDisplayProbe('songloft-slider', 'inline-block');
 
 export type AppPage = 'main' | 'settings' | 'player';
 
