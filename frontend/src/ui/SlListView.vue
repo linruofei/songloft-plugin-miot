@@ -11,17 +11,20 @@ const emit = defineEmits<{ scroll: [Event] }>();
  * 原生分支也绑 `@scroll`：WebF 的 `handleScroll` 只在**挂了监听器**时才派发 DOM `scroll`
  * （`_dispatchScrollEvent`），不绑就永远收不到。
  *
- * 实测结论（WebF 0.24.27，真实 miot 构建产物 + 假后端 2000 首歌，#97 修复后首次跑通）：
- *  - 渲染的是 `<webf-list-view>`（非 `div.sl-list-view-html`），`clientHeight` 读得到
- *    （442px），首尾 spacer 与虚拟窗口协同正常（`0px,126016px` ≈ (2000−31)×64）。
+ * 实测结论（WebF 0.24.27，真实 miot 构建产物 + 假后端 2000 首歌，#97 修复后跑通）：
+ *  - 渲染的是 `<webf-list-view>`（非 `div.sl-list-view-html`），`clientHeight` 读得到，
+ *    首尾 spacer 与虚拟窗口协同正常（`0px,126080px` ≈ (2000−30)×64）。
  *  - `scrollTop` **读**：实时返回数值，绑定是活的。
- *  - `@scroll` **派发**：写入触发的滚动事件被监听器收到（计数 0→1→2）。
- *  - `scrollTop` **写**：写入后视口确实移动、spacer 重平衡、首行变化（写 32000→
- *    视口下移到第 11 行 / top spacer 变 640px；写 0→回到顶部）。但**写入落点与请求值
- *    不一致**：请求 32000px 实际只滚到 ~640px，且回读值（1439/640）与可见偏移对不上，
- *    疑似 WebF `scrollTop` 绑定的单位/异步落点问题。这不影响 #97（本修复只纠正探测让
- *    原生分支得以启用），但建议另开 issue 复核 `MainPage.scrollToIndex` 在原生列表下的
- *    落点精度（其 120ms 轮询 + 重试兜底可能掩盖了该问题）。
+ *  - `@scroll` **派发**：滚动事件被监听器收到。
+ *  - `MainPage.scrollToIndex` **精确落点**：点「定位当前播放」（定位第 1500 首）后
+ *    `scrollTop` 一次落到 95807px（= 1499×64 − (viewport−64)/2），首行变第 1485 首、
+ *    当前歌居中可见，无需重试。
+ *  - 机理（`webf_list_view.dart` 的 `build`）：内部是 `ListView.builder`，
+ *    `itemCount = childNodes.length`，`maxScrollExtent` 按**已布局子节点的平均高度**外推
+ *    未布局的。裸写一个大 offset（窗口在顶、十几万 px 的尾占位条尚未被布局）会被钳到
+ *    ~1400px；但 `scrollToIndex` 先挪窗口（目标行附近变成已渲染区 + 一个已被布局测量的大
+ *    顶占位条），`maxScrollExtent` 随之撑大，写入即精确落点。此前「裸写 32000 只滚到
+ *    ~640px」是探针未先挪窗口的假象，非 bug。
  */
 const root = ref<HTMLElement | null>(null);
 
