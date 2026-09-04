@@ -591,6 +591,179 @@ async function deleteMemoryRecord(id?: string): Promise<void> {
     notify(messageOf(error), 'error');
   }
 }
+
+// ===== 语音记忆新增与编辑 =====
+const memorySongOptions = computed(() =>
+  state.songs.map((song) => ({
+    value: String(song.id),
+    label: `${song.title}${song.artist ? ` · ${song.artist}` : ''}`,
+    searchText: `${song.title} ${song.artist || ''}`,
+  }))
+);
+
+// 新增记忆状态
+const showAddEntityDialog = ref(false);
+const newEntityQuery = ref('');
+const newEntitySongMode = ref<'custom' | 'select'>('select');
+const newEntitySelectedSongId = ref('');
+const newEntityCustomTitle = ref('');
+const newEntityCustomArtist = ref('');
+
+function openAddEntityModal() {
+  newEntityQuery.value = '';
+  newEntitySongMode.value = state.songs.length > 0 ? 'select' : 'custom';
+  newEntitySelectedSongId.value = state.songs.length > 0 ? String(state.songs[0].id) : '';
+  newEntityCustomTitle.value = '';
+  newEntityCustomArtist.value = '';
+  showAddEntityDialog.value = true;
+}
+
+function onSelectEntitySong(songIdStr: string) {
+  newEntitySelectedSongId.value = songIdStr;
+  const found = state.songs.find((s) => String(s.id) === songIdStr);
+  if (found) {
+    newEntityCustomTitle.value = found.title;
+    newEntityCustomArtist.value = found.artist || '';
+  }
+}
+
+async function submitAddEntity() {
+  const query = newEntityQuery.value.trim();
+  if (!query) {
+    notify('请输入用户语音说法', 'warning');
+    return;
+  }
+
+  let songName = '';
+  let artist = '';
+  let songId: number | undefined;
+
+  if (newEntitySongMode.value === 'select') {
+    const found = state.songs.find((s) => String(s.id) === newEntitySelectedSongId.value);
+    if (!found) {
+      notify('请选择关联的本地歌曲', 'warning');
+      return;
+    }
+    songName = found.title;
+    artist = found.artist || '';
+    songId = found.id;
+  } else {
+    songName = newEntityCustomTitle.value.trim();
+    if (!songName) {
+      notify('请输入目标歌曲名称', 'warning');
+      return;
+    }
+    artist = newEntityCustomArtist.value.trim();
+  }
+
+  try {
+    await post('/memory/entities', { query, songName, artist, songId });
+    notify('语音记忆新增成功', 'success');
+    showAddEntityDialog.value = false;
+    await ensureMemoryLoaded(true);
+  } catch (error) {
+    notify(messageOf(error), 'error');
+  }
+}
+
+// 编辑实体状态
+const showEditEntityDialog = ref(false);
+const editEntityKey = ref('');
+const editEntityTitle = ref('');
+const editEntityArtist = ref('');
+
+function openEditEntityModal(entity: MemoryEntity) {
+  editEntityKey.value = String(entity.canonicalKey || (entity as any).canonical_key);
+  editEntityTitle.value = entity.songName || '';
+  editEntityArtist.value = entity.artist || '';
+  showEditEntityDialog.value = true;
+}
+
+async function submitEditEntity() {
+  const songName = editEntityTitle.value.trim();
+  if (!songName) {
+    notify('歌曲名称不能为空', 'warning');
+    return;
+  }
+  try {
+    await post('/memory/entity/update', {
+      canonicalKey: editEntityKey.value,
+      songName,
+      artist: editEntityArtist.value.trim(),
+    });
+    notify('歌曲记忆已更新', 'success');
+    showEditEntityDialog.value = false;
+    await ensureMemoryLoaded(true);
+  } catch (error) {
+    notify(messageOf(error), 'error');
+  }
+}
+
+// 添加别名说法状态
+const showAddAliasDialog = ref(false);
+const addAliasCanonicalKey = ref('');
+const addAliasSongName = ref('');
+const newAliasText = ref('');
+
+function openAddAliasModal(entity: MemoryEntity) {
+  addAliasCanonicalKey.value = String(entity.canonicalKey || (entity as any).canonical_key);
+  addAliasSongName.value = entity.songName || '歌曲';
+  newAliasText.value = '';
+  showAddAliasDialog.value = true;
+}
+
+async function submitAddAlias() {
+  const alias = newAliasText.value.trim();
+  if (!alias) {
+    notify('请输入新的说法词', 'warning');
+    return;
+  }
+  try {
+    await post('/memory/aliases', {
+      canonicalKey: addAliasCanonicalKey.value,
+      alias,
+    });
+    notify('已为歌曲添加新说法', 'success');
+    showAddAliasDialog.value = false;
+    await ensureMemoryLoaded(true);
+  } catch (error) {
+    notify(messageOf(error), 'error');
+  }
+}
+
+// 编辑别名说法状态
+const showEditAliasDialog = ref(false);
+const editAliasCanonicalKey = ref('');
+const editAliasRecordId = ref('');
+const editAliasText = ref('');
+
+function openEditAliasModal(canonicalKey: string, alias: { id?: string; query?: string; alias?: string }) {
+  if (!alias.id) return;
+  editAliasCanonicalKey.value = canonicalKey;
+  editAliasRecordId.value = alias.id;
+  editAliasText.value = alias.query || alias.alias || '';
+  showEditAliasDialog.value = true;
+}
+
+async function submitEditAlias() {
+  const alias = editAliasText.value.trim();
+  if (!alias) {
+    notify('说法内容不能为空', 'warning');
+    return;
+  }
+  try {
+    await post('/memory/aliases/update', {
+      canonicalKey: editAliasCanonicalKey.value,
+      recordId: editAliasRecordId.value,
+      alias,
+    });
+    notify('说法已修改', 'success');
+    showEditAliasDialog.value = false;
+    await ensureMemoryLoaded(true);
+  } catch (error) {
+    notify(messageOf(error), 'error');
+  }
+}
 </script>
 
 <template>
@@ -693,12 +866,119 @@ async function deleteMemoryRecord(id?: string): Promise<void> {
       <div v-if="memoryExpanded" class="sub-panel memory-list">
         <div class="field"><label class="field-label">最大记忆数量（10-500）</label><SlInput :model-value="maxMemory" type="number" @update:model-value="maxMemory = $event" @change="saveNumber('voice_memory_max_records', maxMemory, 10, 500)" /></div>
         <div class="status-chips"><span class="chip">已保存 {{ state.memoryStats.recordCount || state.memoryStats.queryCount || 0 }} 条</span><span class="chip">已学习 {{ state.memoryStats.entityCount || 0 }} 首</span><span class="chip">本地命中 {{ state.memoryStats.localHitCount || state.memoryStats.hitCount || 0 }} 次</span></div>
-        <div class="field-actions"><SlButton variant="text" label="刷新" icon="refresh" @click="ensureMemoryLoaded(true)" /><SlButton variant="text" label="清空全部" icon="delete_sweep" @click="clearMemory" /></div>
+        <div class="field-actions">
+          <SlButton variant="filled" label="新增记忆" icon="add" @click="openAddEntityModal" />
+          <SlButton variant="text" label="刷新" icon="refresh" @click="ensureMemoryLoaded(true)" />
+          <SlButton variant="text" label="清空全部" icon="delete_sweep" @click="clearMemory" />
+        </div>
+
+        <!-- 新增记忆弹窗面板 -->
+        <div v-if="showAddEntityDialog" class="sub-panel sub-panel-inset" style="margin-bottom: 12px;">
+          <h3 class="card-title">新增语音记忆</h3>
+          <div class="field">
+            <label class="field-label">用户语音说法（输入用户唤醒或口令词）</label>
+            <SlInput v-model="newEntityQuery" placeholder="例如：我想听李宗盛的晚婚" aria-label="用户语音说法" />
+          </div>
+          <div class="field">
+            <label class="field-label">歌曲来源方式</label>
+            <div class="field-actions field-actions-tight" style="margin-bottom: 8px;">
+              <SlButton :variant="newEntitySongMode === 'select' ? 'filled' : 'outlined'" label="选择本地歌曲" @click="newEntitySongMode = 'select'" />
+              <SlButton :variant="newEntitySongMode === 'custom' ? 'filled' : 'outlined'" label="手动输入歌曲" @click="newEntitySongMode = 'custom'" />
+            </div>
+          </div>
+          <div v-if="newEntitySongMode === 'select'" class="field">
+            <label class="field-label">从曲库选择歌曲</label>
+            <SlSelect
+              :model-value="newEntitySelectedSongId"
+              :options="memorySongOptions"
+              searchable
+              search-placeholder="搜索曲库歌曲"
+              placeholder="请选择歌曲"
+              aria-label="选择歌曲"
+              @update:model-value="onSelectEntitySong($event)"
+            />
+          </div>
+          <div v-else class="field-grid">
+            <div class="field">
+              <label class="field-label">歌曲名称</label>
+              <SlInput v-model="newEntityCustomTitle" placeholder="例如：晚婚" aria-label="歌曲名称" />
+            </div>
+            <div class="field">
+              <label class="field-label">歌手（可选）</label>
+              <SlInput v-model="newEntityCustomArtist" placeholder="例如：李宗盛" aria-label="歌手" />
+            </div>
+          </div>
+          <div class="field-actions">
+            <SlButton variant="filled" label="保存记忆" icon="check" @click="submitAddEntity" />
+            <SlButton variant="text" label="取消" @click="showAddEntityDialog = false" />
+          </div>
+        </div>
+
+        <!-- 编辑歌曲实体弹窗面板 -->
+        <div v-if="showEditEntityDialog" class="sub-panel sub-panel-inset" style="margin-bottom: 12px;">
+          <h3 class="card-title">编辑歌曲实体</h3>
+          <div class="field-grid">
+            <div class="field">
+              <label class="field-label">歌曲名称</label>
+              <SlInput v-model="editEntityTitle" placeholder="歌名" aria-label="编辑歌名" />
+            </div>
+            <div class="field">
+              <label class="field-label">歌手</label>
+              <SlInput v-model="editEntityArtist" placeholder="歌手" aria-label="编辑歌手" />
+            </div>
+          </div>
+          <div class="field-actions">
+            <SlButton variant="filled" label="确认修改" icon="check" @click="submitEditEntity" />
+            <SlButton variant="text" label="取消" @click="showEditEntityDialog = false" />
+          </div>
+        </div>
+
+        <!-- 为歌曲添加新说法弹窗面板 -->
+        <div v-if="showAddAliasDialog" class="sub-panel sub-panel-inset" style="margin-bottom: 12px;">
+          <h3 class="card-title">为《{{ addAliasSongName }}》添加说法</h3>
+          <div class="field">
+            <label class="field-label">新的语音口令或说法</label>
+            <SlInput v-model="newAliasText" placeholder="例如：再放一遍这首歌" aria-label="添加新说法" @submit="submitAddAlias" />
+          </div>
+          <div class="field-actions">
+            <SlButton variant="filled" label="确认添加" icon="add" @click="submitAddAlias" />
+            <SlButton variant="text" label="取消" @click="showAddAliasDialog = false" />
+          </div>
+        </div>
+
+        <!-- 编辑已有说法弹窗面板 -->
+        <div v-if="showEditAliasDialog" class="sub-panel sub-panel-inset" style="margin-bottom: 12px;">
+          <h3 class="card-title">修改语音说法</h3>
+          <div class="field">
+            <label class="field-label">说法词内容</label>
+            <SlInput v-model="editAliasText" placeholder="说法词" aria-label="修改说法词" @submit="submitEditAlias" />
+          </div>
+          <div class="field-actions">
+            <SlButton variant="filled" label="保存修改" icon="check" @click="submitEditAlias" />
+            <SlButton variant="text" label="取消" @click="showEditAliasDialog = false" />
+          </div>
+        </div>
+
         <div class="memory-list-body">
-          <div v-for="entity in state.memoryEntities" :key="String(entity.canonicalKey || entity.canonical_key)" class="memory-entity">
-            <div class="list-item"><div class="list-item-copy"><strong class="list-item-title">{{ entity.songName || '未命名歌曲' }}{{ entity.artist ? ` · ${entity.artist}` : '' }}</strong><span class="list-item-subtitle">{{ memoryAliases(entity).length }} 种说法</span></div><SlButton variant="icon" :icon="expandedMemory === String(entity.canonicalKey || entity.canonical_key) ? 'expand_less' : 'expand_more'" title="展开记忆" @click="expandedMemory = expandedMemory === String(entity.canonicalKey || entity.canonical_key) ? null : String(entity.canonicalKey || entity.canonical_key)" /><SlButton variant="icon" icon="delete" title="删除歌曲记忆" @click="deleteMemoryEntity(String(entity.canonicalKey || entity.canonical_key), entity.songName || '歌曲')" /></div>
-            <div v-if="expandedMemory === String(entity.canonicalKey || entity.canonical_key)" class="memory-aliases">
-              <div v-for="(alias, index) in memoryAliases(entity)" :key="alias.id || index" class="memory-alias-row"><span>{{ alias.query || alias.alias || '未命名说法' }}</span><SlButton v-if="alias.id" variant="icon" icon="close" title="删除这条记忆" @click="deleteMemoryRecord(alias.id)" /></div>
+          <div v-for="entity in state.memoryEntities" :key="String(entity.canonicalKey || (entity as any).canonical_key)" class="memory-entity">
+            <div class="list-item">
+              <div class="list-item-copy">
+                <strong class="list-item-title">{{ entity.songName || '未命名歌曲' }}{{ entity.artist ? ` · ${entity.artist}` : '' }}</strong>
+                <span class="list-item-subtitle">{{ memoryAliases(entity).length }} 种说法</span>
+              </div>
+              <SlButton variant="icon" :icon="expandedMemory === String(entity.canonicalKey || (entity as any).canonical_key) ? 'expand_less' : 'expand_more'" title="展开记忆" @click="expandedMemory = expandedMemory === String(entity.canonicalKey || (entity as any).canonical_key) ? null : String(entity.canonicalKey || (entity as any).canonical_key)" />
+              <SlButton variant="icon" icon="add" title="为此歌曲添加新说法" @click="openAddAliasModal(entity)" />
+              <SlButton variant="icon" icon="edit" title="编辑歌曲信息" @click="openEditEntityModal(entity)" />
+              <SlButton variant="icon" icon="delete" title="删除歌曲记忆" @click="deleteMemoryEntity(String(entity.canonicalKey || (entity as any).canonical_key), entity.songName || '歌曲')" />
+            </div>
+            <div v-if="expandedMemory === String(entity.canonicalKey || (entity as any).canonical_key)" class="memory-aliases">
+              <div v-for="(alias, index) in memoryAliases(entity)" :key="alias.id || index" class="memory-alias-row">
+                <span>{{ alias.query || alias.alias || '未命名说法' }}</span>
+                <div style="display: flex; gap: 4px;">
+                  <SlButton v-if="alias.id" variant="icon" icon="edit" title="编辑这条说法" @click="openEditAliasModal(String(entity.canonicalKey || (entity as any).canonical_key), alias)" />
+                  <SlButton v-if="alias.id" variant="icon" icon="close" title="删除这条记忆" @click="deleteMemoryRecord(alias.id)" />
+                </div>
+              </div>
             </div>
           </div>
           <div v-if="!state.memoryEntities.length" class="empty-state">暂无可聚合的歌曲记忆</div>

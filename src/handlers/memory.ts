@@ -309,6 +309,116 @@ export function registerMemoryHandlers(
     }
   });
 
+  router.put('/memory/aliases', async (req: HTTPRequest) => {
+    try {
+      await ensureMemoryReady();
+      const body = parseBody(req);
+      const canonicalKey = typeof body.canonicalKey === 'string' ? body.canonicalKey : '';
+      const recordId = typeof body.recordId === 'string' ? body.recordId : '';
+      const alias = typeof body.alias === 'string' ? body.alias : '';
+      if (!canonicalKey || !recordId || !alias) {
+        return jsonResponse({ success: false, error: '缺少 canonicalKey, recordId 或 alias' }, 400);
+      }
+      const result = await memoryService.updateManualAlias(canonicalKey, recordId, alias);
+      if (!result.ok) {
+        const status = result.error?.startsWith('保存') ? 500 : 400;
+        return jsonResponse({ success: false, error: result.error || '修改别名失败' }, status);
+      }
+      return jsonResponse({ success: true, data: { record: result.record, stats: memoryService.getStats() } });
+    } catch (error) {
+      songloft.log.warn('[MemoryHandler] update alias failed: ' + String(error));
+      return jsonResponse({ success: false, error: '修改别名失败' }, 500);
+    }
+  });
+
+  router.post('/memory/aliases/update', async (req: HTTPRequest) => {
+    try {
+      await ensureMemoryReady();
+      const body = parseBody(req);
+      const canonicalKey = typeof body.canonicalKey === 'string' ? body.canonicalKey : '';
+      const recordId = typeof body.recordId === 'string' ? body.recordId : '';
+      const alias = typeof body.alias === 'string' ? body.alias : '';
+      if (!canonicalKey || !recordId || !alias) {
+        return jsonResponse({ success: false, error: '缺少 canonicalKey, recordId 或 alias' }, 400);
+      }
+      const result = await memoryService.updateManualAlias(canonicalKey, recordId, alias);
+      if (!result.ok) {
+        const status = result.error?.startsWith('保存') ? 500 : 400;
+        return jsonResponse({ success: false, error: result.error || '修改别名失败' }, status);
+      }
+      return jsonResponse({ success: true, data: { record: result.record, stats: memoryService.getStats() } });
+    } catch (error) {
+      songloft.log.warn('[MemoryHandler] update alias failed: ' + String(error));
+      return jsonResponse({ success: false, error: '修改别名失败' }, 500);
+    }
+  });
+
+  router.post('/memory/entities', async (req: HTTPRequest) => {
+    try {
+      await ensureMemoryReady();
+      const body = parseBody(req);
+      const query = typeof body.query === 'string' ? body.query : '';
+      const songName = typeof body.songName === 'string' ? body.songName : '';
+      const artist = typeof body.artist === 'string' ? body.artist : '';
+      const songId = typeof body.songId === 'number' ? body.songId : undefined;
+      if (!query || !songName) {
+        return jsonResponse({ success: false, error: '缺少 query 或 songName' }, 400);
+      }
+      const result = await memoryService.addEntityRecord({ query, songName, artist, songId });
+      if (!result.ok) {
+        return jsonResponse({ success: false, error: result.error || '新增记忆失败' }, 400);
+      }
+      return jsonResponse({ success: true, data: { record: result.record, stats: memoryService.getStats() } });
+    } catch (error) {
+      songloft.log.warn('[MemoryHandler] create entity failed: ' + String(error));
+      return jsonResponse({ success: false, error: '新增记忆失败' }, 500);
+    }
+  });
+
+  router.put('/memory/entity', async (req: HTTPRequest) => {
+    try {
+      await ensureMemoryReady();
+      const body = parseBody(req);
+      const canonicalKey = typeof body.canonicalKey === 'string' ? body.canonicalKey : '';
+      const songName = typeof body.songName === 'string' ? body.songName : '';
+      const artist = typeof body.artist === 'string' ? body.artist : undefined;
+      const songId = typeof body.songId === 'number' ? body.songId : undefined;
+      if (!canonicalKey || !songName) {
+        return jsonResponse({ success: false, error: '缺少 canonicalKey 或 songName' }, 400);
+      }
+      const result = await memoryService.updateEntity(canonicalKey, { songName, artist, songId });
+      if (!result.ok) {
+        return jsonResponse({ success: false, error: result.error || '更新记忆失败' }, 400);
+      }
+      return jsonResponse({ success: true, data: { stats: memoryService.getStats() } });
+    } catch (error) {
+      songloft.log.warn('[MemoryHandler] update entity failed: ' + String(error));
+      return jsonResponse({ success: false, error: '更新记忆失败' }, 500);
+    }
+  });
+
+  router.post('/memory/entity/update', async (req: HTTPRequest) => {
+    try {
+      await ensureMemoryReady();
+      const body = parseBody(req);
+      const canonicalKey = typeof body.canonicalKey === 'string' ? body.canonicalKey : '';
+      const songName = typeof body.songName === 'string' ? body.songName : '';
+      const artist = typeof body.artist === 'string' ? body.artist : undefined;
+      const songId = typeof body.songId === 'number' ? body.songId : undefined;
+      if (!canonicalKey || !songName) {
+        return jsonResponse({ success: false, error: '缺少 canonicalKey 或 songName' }, 400);
+      }
+      const result = await memoryService.updateEntity(canonicalKey, { songName, artist, songId });
+      if (!result.ok) {
+        return jsonResponse({ success: false, error: result.error || '更新记忆失败' }, 400);
+      }
+      return jsonResponse({ success: true, data: { stats: memoryService.getStats() } });
+    } catch (error) {
+      songloft.log.warn('[MemoryHandler] update entity failed: ' + String(error));
+      return jsonResponse({ success: false, error: '更新记忆失败' }, 500);
+    }
+  });
+
   router.delete('/memory/aliases', async (req: HTTPRequest) => {
     try {
       await ensureMemoryReady();

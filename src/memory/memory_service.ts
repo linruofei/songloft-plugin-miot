@@ -485,6 +485,103 @@ export class MemoryService {
     return ok && created ? { ok: true, record: created } : { ok: false, error: '保存别名失败，原记忆未修改' };
   }
 
+  async updateManualAlias(canonicalKey: string, recordId: string, newAlias: string): Promise<MemoryMutationResult> {
+    const trimmed = (newAlias || '').trim();
+    const length = Array.from(trimmed).length;
+    const normalizedQuery = this.normalizeQuery(trimmed);
+    if (!normalizedQuery) return { ok: false, error: '别名不能为空' };
+    if (length < 2 || length > 30) return { ok: false, error: '别名长度必须为 2 到 30 个字符' };
+    if (BLOCKED_MANUAL_ALIASES.has(normalizedQuery)) return { ok: false, error: '该词过于宽泛或属于固定控制命令' };
+
+    const entity = this.entityIndex.entities.get(canonicalKey);
+    if (!entity) return { ok: false, error: '未找到歌曲实体' };
+
+    const derived = this.entityIndex.derivedByRecordId.get(recordId);
+    if (!derived || derived.canonicalKey !== canonicalKey) {
+      return { ok: false, error: '未找到要修改的说法记录' };
+    }
+
+    if (derived.record.normalizedQuery !== normalizedQuery && (this.records.has(normalizedQuery) || this.entityIndex.aliasIndex.has(normalizedQuery))) {
+      return { ok: false, error: '该别名已存在' };
+    }
+
+    let updated: MemoryRecord | undefined;
+    const ok = await this.enqueueWrite('updateManualAlias', async () => {
+      const candidate = new Map(this.records);
+      const oldRecord = findById(candidate, recordId);
+      if (!oldRecord) return false;
+
+      candidate.delete(oldRecord.normalizedQuery);
+      const timestamp = nowIso();
+      updated = this.upgradeRecord({
+        ...oldRecord,
+        query: trimmed,
+        normalizedQuery,
+        manualAlias: true,
+        aliasSource: 'manual',
+        updatedAt: timestamp,
+      });
+      candidate.set(normalizedQuery, updated);
+      return this.commitCandidate(candidate);
+    });
+
+    return ok && updated ? { ok: true, record: updated } : { ok: false, error: '更新说法失败' };
+  }
+
+  async updateEntity(canonicalKey: string, updates: { songName?: string; artist?: string; songId?: number }): Promise<MemoryMutationResult> {
+    const songName = (updates.songName || '').trim();
+    if (!songName) return { ok: false, error: '歌名不能为空' };
+    const artist = (updates.artist || '').trim();
+
+    const entity = this.entityIndex.entities.get(canonicalKey);
+    if (!entity) return { ok: false, error: '未找到歌曲实体' };
+
+    const ok = await this.enqueueWrite('updateEntity', async () => {
+      const candidate = new Map(this.records);
+      const timestamp = nowIso();
+      for (const recordId of entity.recordIds) {
+        const record = findById(candidate, recordId);
+        if (record) {
+          const newRecord = this.upgradeRecord({
+            ...record,
+            songName,
+            artist,
+            songId: updates.songId !== undefined ? updates.songId : record.songId,
+            updatedAt: timestamp,
+          });
+          candidate.set(record.normalizedQuery, newRecord);
+        }
+      }
+      return this.commitCandidate(candidate);
+    });
+
+    return ok ? { ok: true } : { ok: false, error: '更新歌曲实体失败' };
+  }
+
+  async addEntityRecord(input: { query: string; songName: string; artist?: string; songId?: number }): Promise<MemoryMutationResult> {
+    const trimmedQuery = (input.query || '').trim();
+    const songName = (input.songName || '').trim();
+    if (!trimmedQuery) return { ok: false, error: '语音说法不能为空' };
+    if (!songName) return { ok: false, error: '歌曲名称不能为空' };
+
+    const normalizedQuery = this.normalizeQuery(trimmedQuery);
+    if (!normalizedQuery) return { ok: false, error: '说法包含无效字符' };
+    if (BLOCKED_MANUAL_ALIASES.has(normalizedQuery)) return { ok: false, error: '该词过于宽泛或属于固定控制命令' };
+
+    const artist = (input.artist || '').trim();
+    const success = await this.recordSuccess({
+      query: trimmedQuery,
+      type: 'play_song',
+      songName,
+      artist,
+      songId: input.songId,
+    });
+
+    if (!success) return { ok: false, error: '保存记忆实体失败' };
+    const record = this.findByQuery(trimmedQuery);
+    return { ok: true, record: record ?? undefined };
+  }
+
   async deleteEntityAlias(canonicalKey: string, recordId: string): Promise<boolean> {
     return this.enqueueWrite('deleteEntityAlias', async () => {
       const derived = this.entityIndex.derivedByRecordId.get(recordId);
