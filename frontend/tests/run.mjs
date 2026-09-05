@@ -62,6 +62,10 @@ assert.match(store, /await selectCurrentPlaylistOnEntry\(\)/);
 assert.match(store, /pendingConfigPatch/);
 assert.match(store, /while \(pendingConfigPatch\)/);
 assert.doesNotMatch(switchComponent, /flutter-cupertino-switch/);
+// SlButton 不得恢复 cupertino 分支：WebF flex-wrap 容器里 auto 宽度的
+// RenderWidget 基线被测成视口宽 → 按钮超出屏幕、每个独占一行
+// （songloft-org/songloft#440，机理见主仓 docs/webf/handoff.md 第 21 条）。
+assert.doesNotMatch(slButton, /flutter-cupertino-button/);
 assert.match(selectComponent, /getBoundingClientRect\(\)/);
 assert.match(selectComponent, /sl-select-option-on/);
 assert.match(selectComponent, /sl-select-wrap-open/);
