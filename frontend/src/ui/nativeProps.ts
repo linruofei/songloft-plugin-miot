@@ -30,8 +30,9 @@ export function bindNativeProps(
  * 「音量滑块横着、停在 0、还溢出弹出层」的成因。
  *
  * 刻意不在模板里用 `:value="..."` 直接绑：Vue 对含连字符的自定义元素走
- * `key in el` 判定，而 WebF 元素上 `'value' in el` 为真（`runtime.ts` 的
- * `hasNativeElement` 正是靠这个探测原生元素是否存在），于是又会写成 property。
+ * `key in el` 判定，而 WebF 元素上 `'value' in el` 为真（对**任何** WebF 元素都为
+ * 真，连未注册标签也是，见 `runtime.ts` 的 nativeMemberProbe 注释），
+ * 于是又会写成 property。
  *
  * `false` / `null` / `undefined` 一律 `removeAttribute`：宿主对 `disabled`
  * 是「属性存在即禁用」的语义，留一个 `disabled="false"` 反而会被当成禁用。

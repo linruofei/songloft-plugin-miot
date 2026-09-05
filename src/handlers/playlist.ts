@@ -50,6 +50,10 @@ interface DeviceStatusCache {
   // position 是否真的来自设备的 play_song_detail（而非本地推算/动作后的乐观写入）。
   // 只有设备实测位置才允许回写本地进度，见 syncManagerFromDeviceState。
   positionFromDevice: boolean;
+  // 设备上报的当前媒体**流长**（秒，0 = 未上报）。与 duration 不同：duration 会被本地歌曲
+  // 时长覆盖（本地元数据更可靠），这里保留设备原值，用于判断音箱在放的是不是我们推的流
+  // （PlaylistManager.matchDeviceStream，songloft-org/songloft-plugin-miot#96）。
+  streamDuration: number;
 }
 const deviceStatusCache: Map<string, DeviceStatusCache> = new Map();
 const deviceStatusInflight: Map<string, Promise<any>> = new Map();
@@ -68,6 +72,9 @@ export function updateDeviceStatusCache(accountId: string, deviceId: string, dat
     volumeLockedUntil: data.lockVolume ? Date.now() + 10000 : (existing?.volumeLockedUntil ?? 0),
     // 外部写入（播放/暂停/停止动作后的乐观刷新）给的都是本地推算位置，不是设备实测
     positionFromDevice: data.positionFromDevice ?? false,
+    // 不继承旧的 streamDuration：外部写入多发生在刚推完一条新流之后，旧流长已失效，
+    // 留着会让身份校验拿过期流长误判。0 = 未知，校验方会退回保守行为。
+    streamDuration: data.streamDuration ?? 0,
   });
 }
 
@@ -99,6 +106,7 @@ function syncManagerFromDeviceState(
   deviceState: string,
   devicePosition: number,
   deviceReportsProgress: boolean,
+  deviceStreamDuration: number,
 ): void {
   // 小爱在 URL/MUSIC 播放模式下会偶发把正常播放的流上报成 paused/stopped。
   // 读状态接口不能因此清掉本地自动切歌定时器；只有设备确认在播放时才用它校准恢复。
@@ -110,7 +118,15 @@ function syncManagerFromDeviceState(
       manager.resetAutoNextTimer(devicePosition);
     }
   } else if (localState === 'playing' && deviceState === 'playing' && manager.isVoiceSuspended()) {
-    manager.resetAutoNextTimer(devicePosition);
+    // 语音交互挂起期间设备「在播放」，可能是小爱在放它自己的内容而不是我们的流。
+    // 拿它的进度重锚定时器 = 把小爱内容的位置当成我们歌的位置，剩余时长直接算错，
+    // 到点就跳歌（songloft-org/songloft-plugin-miot#96）。认出是外来媒体就不校准，
+    // 交给 smartResume 去重推 URL；'unknown'（设备不报流长）保持旧行为。
+    if (manager.matchDeviceStream({ status: 1, duration: deviceStreamDuration }) !== 'foreign') {
+      manager.resetAutoNextTimer(devicePosition);
+    } else {
+      songloft.log.warn(`[player/status] Voice-suspended but speaker plays foreign media (deviceDuration=${deviceStreamDuration}s), skip timer calibration`);
+    }
   } else if (localState === 'playing' && deviceState === 'playing') {
     // 远程歌曲需要缓冲时间，本地定时器从发送 URL 就开始计时，
     // 但设备要等缓冲完成才开始播放，导致本地位置显著超前设备实际位置。
@@ -191,7 +207,7 @@ export async function resolvePlayerStatus(
     // 用被查询设备的物理进度校准共享切歌定时器。分组下无论查询哪个成员都可校准
     // （成员播放同一首、进度相近，校准收敛）；已有的近末尾/重拉守卫防止异常重置。
     syncManagerFromDeviceState(manager, localStatus.state, cached.state, cachedAbsPosition,
-      cached.positionFromDevice && cached.position > 0);
+      cached.positionFromDevice && cached.position > 0, cached.streamDuration);
 
     // 本地已 stop 时，不让设备残留的播放状态覆盖，避免前端进度条跳动
     const reportState = resolveReportState(localStatus.state, cached.state);
@@ -206,6 +222,7 @@ export async function resolvePlayerStatus(
   let realDuration = localStatus.duration;
   let realState = localStatus.state;
   let devicePosition = -1; // 设备 play_song_detail 上报的流内位置，-1 = 未上报
+  let deviceStreamDuration = 0; // 设备上报的当前媒体流长（秒），0 = 未上报；不被本地时长覆盖
   try {
     const raw = await getOrFetchDeviceStatus(account_id, device_id, () => minaService.getPlayerStatus(account_id, device_id));
     const info = raw?.data?.info;
@@ -227,7 +244,10 @@ export async function resolvePlayerStatus(
           // 乘以 speed 还原成曲内秒，再加 seekOffset 得曲内绝对位置。
           realPosition = devicePosition * speed + seekOffset;
         }
-        if (typeof d.duration === 'number') realDuration = Math.floor(d.duration / 1000);
+        if (typeof d.duration === 'number') {
+          deviceStreamDuration = Math.floor(d.duration / 1000);
+          realDuration = deviceStreamDuration;
+        }
       }
     }
   } catch (e: any) {
@@ -250,9 +270,10 @@ export async function resolvePlayerStatus(
     timestamp: now,
     volumeLockedUntil: cached?.volumeLockedUntil ?? 0,
     positionFromDevice: devicePosition >= 0,
+    streamDuration: deviceStreamDuration,
   });
 
-  syncManagerFromDeviceState(manager, localStatus.state, realState, realPosition, devicePosition > 0);
+  syncManagerFromDeviceState(manager, localStatus.state, realState, realPosition, devicePosition > 0, deviceStreamDuration);
 
   // 本地已 stop 时，不让设备残留的播放状态覆盖
   const reportState = resolveReportState(localStatus.state, realState);
