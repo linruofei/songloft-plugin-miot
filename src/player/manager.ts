@@ -1719,6 +1719,11 @@ export class PlaylistManager {
       });
     }
 
+    // 播放完当前歌曲后立即异步向音箱下发 stop，压制音箱底层硬件自动从头重放上一首
+    void this.forEachTarget('stop', t => this.minaService.stopPlay(t.account_id, t.device_id)).catch(e => {
+      songloft.log.warn('[PlaylistManager] advanceToNext interim stop error: ' + String(e));
+    });
+
     if (this.playMode === 'singlePlay') {
       // 与主程序一致：自然播放结束后停在当前歌曲，不循环也不推进。
       // 显式向音箱下发 stop，避免小爱音箱底层硬件媒体服务在 URL 播完后自动重头循环
