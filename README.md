@@ -135,3 +135,5 @@ hanxi
 ## License
 
 Apache-2.0 © 2026 hanxi
+
+- 支持跨插件通信 (inter-plugin comm) 与免鉴权接口调用
