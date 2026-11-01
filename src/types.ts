@@ -40,6 +40,9 @@ export interface DeviceConfig {
   current_song_index: number;
   last_selected_at: string;
   temp_artist?: string;      // 临时歌手歌单的搜索词，重启后用于恢复
+  temp_artist_exact?: boolean; // 独立歌曲扩展的歌手队列：按完整歌手名匹配整个曲库
+  temp_song_id?: number;       // 临时歌手队列恢复时按稳定 ID 定位当前歌曲
+  temp_start_song_id?: number; // 保留独立歌曲队列「点播歌曲在前」的顺序
 
   // ===== 重载续播锚点（songloft-org/songloft-plugin-miot#96）=====
   // 插件热重载（自动更新、手动更新、zip 变更热重载）会销毁整个 JS 环境，
@@ -51,6 +54,27 @@ export interface DeviceConfig {
   resume_song_id?: number;       // 锚点属于哪一首；恢复时对不上就不续播，避免歌单变动后错位
   resume_seek_offset_sec?: number; // 当时那条流从歌曲第几秒开始；设备上报的流内偏移要加它才是曲内位置
 }
+
+// ===== 歌单播放进度（每设备 × 每歌单）=====
+
+/**
+ * 某台设备在某个歌单里最后播到哪一首。
+ *
+ * 上面 DeviceConfig 的 `playlist_id` / `current_song_index` 只有**一个槽位**，表达的是
+ * 「这台设备最后活跃的是哪个歌单」，是热重载续播（`resumeAfterReload`）的依据；切一次歌单
+ * 上一个歌单的进度就被覆盖，于是切回去只能从头播。本结构按歌单分别记，来回切歌单时
+ * 每个歌单都能回到自己上次的位置。两者语义不同，不要相互替代。
+ */
+export interface PlaylistProgress {
+  playlist_id: number;
+  song_id: number;       // 主键：按 ID 定位，歌单排序变化/增删歌之后仍准（同 #59 / #420 的教训）
+  song_index: number;    // 兜底提示：song_id 已不在歌单里时退回这个下标
+  position_sec: number;  // 该歌曲内的位置（秒）。当前只记录不消费，续播一律从这首歌开头开始
+  updated_at: number;    // Date.now()，超出每设备条数上限时按它淘汰最久没播的歌单
+}
+
+/** 歌单进度表：scopeKey（'<accountId>:<deviceId>'）-> 该设备各歌单的进度 */
+export type PlaylistProgressStore = Record<string, PlaylistProgress[]>;
 
 // ===== Token信息 =====
 
@@ -155,7 +179,7 @@ export interface PluginConfig {
   external_search_timeout: number;     // 外部搜索超时（秒），默认 6
   external_search_no_import: boolean;   // 不入库直接播放：命中直链型结果时直接把原始 URL 推给音箱，不写入曲库（临时链接友好）
   search_priority: SearchPriority;     // 搜歌优先级策略
-  extra_music_api_models?: string[];
+  music_api_model_disabled?: string[]; // 显式禁用 Music API 的型号（覆盖内置默认清单）
   indicator_light_enabled?: boolean;
   default_cover_id?: string;
   touchscreen_lyrics_enabled?: boolean; // 触屏歌词：逐首匹配云端曲库以在触屏音箱显示歌词
@@ -167,8 +191,9 @@ export interface PluginConfig {
   play_announcement_delay: number;
   play_announcement_scope: 'voice' | 'all';
   conversation_poll_interval: number;
-  conversation_poll_debug?: boolean; // 会话轮询调试日志开关，默认 false（稳态轮询不打冗余日志）
+  debug_log_enabled?: boolean; // 调试日志开关，默认 false（覆盖会话轮询与音箱推流诊断日志）
   smart_resume_timeout: number;
+  hourly_chime_resume_enabled?: boolean; // 整点报时后续播，默认关闭
   max_song_index: number;
   ai_config: AIConfig;
 }
@@ -232,7 +257,8 @@ export interface TaskParams {
   song_id?: number;        // 用于 play_playlist_from 按 ID 指定起始歌曲（前端选择器产出）
   start_position?: StartPosition; // 用于 play_playlist 指定起始位置,缺省=first
   play_mode?: string;      // 空串表示「跟随上次」(沿用设备持久化的播放模式)
-  volume?: number;
+  volume?: number;         // 对 set_volume：目标音量；对 play_playlist(_from)：播放前预设音量，缺省=不改
+  stop_after_minutes?: number; // 仅 play_playlist(_from) 生效：播放成功后 N 分钟自动停止；缺省=不启用
 }
 
 /** 任务执行日志 */
@@ -271,6 +297,7 @@ export interface AIConfig {
   enabled: boolean;
   api_url: string;
   api_key: string;
+  custom_headers?: Record<string, string>;
   model: string;
   timeout: number;         // 秒数，默认 6
   prompt?: string;         // 自定义系统提示词，留空时使用默认提示词
@@ -294,6 +321,8 @@ export interface AIAnalysisResult {
     duration?: number;
     /** sleep_timer：定时停止的曲目数 */
     songs_count?: number;
+    /** play_index：跳到当前歌单的第 N 首（1 起） */
+    index?: number;
   };
   /** AI 置信度 */
   confidence: 'high' | 'medium' | 'low';

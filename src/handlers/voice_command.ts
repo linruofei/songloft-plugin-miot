@@ -1,3 +1,4 @@
+import type { VoiceDispatcher } from '../voicecmd/dispatcher';
 // MIoT 智能音箱插件 - 语音口令 Handler
 // 翻译自 Go 源码: plugins/songloft-plugin-xiaomi/handlers/voice_command_handler.go
 
@@ -8,6 +9,9 @@ import { ConfigManager } from '../config/manager';
 import type { ConversationMessage, DeviceConfig } from '../types';
 import { AIAnalyzer } from '../voicecmd/ai_analyzer';
 import { VoiceEngine } from '../voicecmd/engine';
+import { aiModelsUrl, maskUrl } from '../utils/ai_url';
+import { requestAI } from '../utils/ai_request';
+import { aiRequestHeaders } from '../utils/ai_headers';
 
 /** 解析请求体（兼容 Uint8Array 和 string） */
 function parseBody(req: HTTPRequest): any {
@@ -84,9 +88,16 @@ async function resolveTargetDevice(
   throw new Error('device_id is required when multiple managed devices are available');
 }
 
+interface ModelInfo {
+  id: string;
+  object?: string;
+  owned_by?: string;
+}
+
 /**
  * 注册语音口令相关路由
  * GET  /voice-commands → 获取语音口令配置
+ * GET  /voice-commands/models → 获取可用模型列表（同时校验 API 连通性）
  * POST /voice-commands → 设置语音口令配置
  * POST /voice-commands/ai-test → 测试 AI 口令分析
  * POST /voice-commands/test → 模拟语音口令（完整匹配+执行）并返回诊断
@@ -97,6 +108,7 @@ export function registerVoiceCommandHandlers(
   configManager: ConfigManager,
   accountManager: AccountManager,
   voiceEngine: VoiceEngine,
+  dispatcher?: VoiceDispatcher,
 ): void {
 
   // GET /voice-commands - 获取语音口令配置
@@ -110,6 +122,71 @@ export function registerVoiceCommandHandlers(
       });
     } catch (e: any) {
       return jsonResponse({ success: false, error: e.message || String(e) });
+    }
+  });
+
+  // GET /voice-commands/models - 获取可用模型列表（同时校验 API 连通性）
+  router.get('/voice-commands/models', async (req: HTTPRequest) => {
+    // modelsUrl 在 try 外声明：catch 里要把「实际请求地址」放进错误提示，
+    // 若声明在 try 内，catch 引用会抛 ReferenceError，把真实原因整个吞掉。
+    let modelsUrl = '';
+    try {
+      const aiConfig = await configManager.getAIConfig();
+      if (!aiConfig.api_url || !aiConfig.api_key) {
+        return jsonResponse({ success: false, error: 'AI 配置不完整，请先填写 API 地址和密钥' });
+      }
+
+      // 统一经 normalizeAiBaseUrl 归一：用户填 https://host 或 https://host/v1
+      // 都得到「含 /v1 的 base」，避免拼出 .../v1/v1/models 这种重复前缀
+      modelsUrl = aiModelsUrl(aiConfig.api_url);
+      const models = await requestAI(modelsUrl, {
+        method: 'GET',
+        headers: aiRequestHeaders(aiConfig),
+      }, aiConfig.timeout, { kind: 'models' }, async (resp, requestId) => {
+        // QuickJS 无 Response 类，duck-type 检查关键属性
+        if (!resp || typeof resp.ok !== 'boolean' || typeof resp.status !== 'number') {
+          throw new Error('无效的响应对象');
+        }
+
+        if (!resp.ok) {
+          const body = await resp.text().catch(() => '');
+          throw new Error(`模型列表请求失败 (${resp.status}): ${body.slice(0, 200)}`);
+        }
+
+        const data: { object: string; data?: Array<{ id: string; object?: string; owned_by?: string }> } = await resp.json();
+        if (!Array.isArray(data.data)) {
+          throw new Error('响应格式错误：缺少 data 数组');
+        }
+
+        songloft.log.info(`[VoiceCommands] id=${requestId} model_count=${data.data.length}`);
+        return data.data.map((m: ModelInfo) => ({ id: m.id, ownedBy: m.owned_by || '' }));
+      });
+
+      return jsonResponse({
+        success: true,
+        data: { models, modelCount: models.length },
+      });
+    } catch (e: any) {
+      const msg = e.message || String(e);
+      // 把底层网络错误包装成通俗提示
+      if (msg.includes('dial tcp') || msg.includes('lookup') || msg.includes('ENOTFOUND')) {
+        return jsonResponse({ success: false, error: '无法连接 API，请检查 API 地址是否正确' });
+      }
+      if (msg.includes('timed out') || msg.includes('timeout')) {
+        return jsonResponse({ success: false, error: '请求超时，请检查网络或加大超时时间' });
+      }
+      if (msg.includes('401') || msg.includes('403') || msg.includes('unauthorized') || msg.includes('forbidden')) {
+        return jsonResponse({ success: false, error: 'API Key 不正确或无权限' });
+      }
+      if (msg.includes('404') || msg.includes('not found')) {
+        // 带上实际请求地址（脱敏），便于判断是「地址填错/前缀重复」还是「服务不提供该端点」
+        const hint = modelsUrl ? `（实际请求：${maskUrl(modelsUrl)}）` : '';
+        return jsonResponse({
+          success: false,
+          error: `未找到模型列表端点${hint}：请确认 API 地址是否正确、该服务是否提供 /v1/models；若不支持该端点，可直接在「模型」处手动填写模型名`,
+        });
+      }
+      return jsonResponse({ success: false, error: '获取模型列表失败：' + msg.slice(0, 200) });
     }
   });
 
@@ -213,7 +290,8 @@ export function registerVoiceCommandHandlers(
         },
       };
 
-      await voiceEngine.handleMessage(conversationMessage);
+      if (dispatcher) dispatcher.submit(conversationMessage);
+      else await voiceEngine.handleMessage(conversationMessage);
       return jsonResponse({
         success: true,
         data: {

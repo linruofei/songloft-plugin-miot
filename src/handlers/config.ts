@@ -10,8 +10,10 @@ import { VoiceEngine } from '../voicecmd/engine';
 import { normalizeMemoryMaxRecords } from '../memory';
 import type { MemoryService } from '../memory';
 import { setHostBaseUrl, callHostAPI } from '../utils/http';
-import { setPollDebug } from '../utils/debug';
+import { setDebugLog } from '../utils/debug';
 import type { SearchPriority } from '../types';
+import { DEFAULT_MUSIC_API_MODELS } from '../mina/constants';
+import { validateAIHeaders } from '../utils/ai_headers';
 
 const SEARCH_PRIORITIES: SearchPriority[] = ['parallel', 'local_first', 'external_first'];
 
@@ -103,7 +105,8 @@ export function registerConfigHandlers(
           external_search_timeout: config.external_search_timeout ?? 6,
           external_search_no_import: !!config.external_search_no_import,
           search_priority: normalizeSearchPriority(config.search_priority),
-          extra_music_api_models: config.extra_music_api_models || [],
+          music_api_model_disabled: config.music_api_model_disabled || [],
+          music_api_model_defaults: [...DEFAULT_MUSIC_API_MODELS],
           indicator_light_enabled: !!config.indicator_light_enabled,
           interrupt_tts_hint_enabled: !!config.interrupt_tts_hint_enabled,
           interrupt_tts_hint_text: config.interrupt_tts_hint_text || '正在搜索，请稍候',
@@ -112,9 +115,10 @@ export function registerConfigHandlers(
           play_announcement_wait_mode: config.play_announcement_wait_mode || 'auto',
           play_announcement_delay: config.play_announcement_delay ?? 3,
           play_announcement_scope: config.play_announcement_scope || 'voice',
-          conversation_poll_interval: config.conversation_poll_interval ?? 1,
-          conversation_poll_debug: !!config.conversation_poll_debug,
+          conversation_poll_interval: config.conversation_poll_interval ?? 2,
+          debug_log_enabled: !!config.debug_log_enabled,
           smart_resume_timeout: config.smart_resume_timeout ?? 30,
+          hourly_chime_resume_enabled: !!config.hourly_chime_resume_enabled,
           max_song_index: config.max_song_index ?? 10000,
           server_host_status: getServerHostStatus(config.server_host),
           suggested_addresses: suggestedAddresses,
@@ -132,6 +136,9 @@ export function registerConfigHandlers(
   router.post('/config', async (req: HTTPRequest) => {
     try {
       const body = parseBody(req);
+      if (body.hourly_chime_resume_enabled !== undefined && typeof body.hourly_chime_resume_enabled !== 'boolean') {
+        return jsonResponse({ success: false, error: 'hourly_chime_resume_enabled must be boolean' }, 400);
+      }
       const config = await configManager.getConfig();
       let memoryMaxChanged = false;
 
@@ -307,7 +314,9 @@ export function registerConfigHandlers(
 
       // 更新 conversation_poll_interval（联动 Monitor 重启）
       if (body.conversation_poll_interval !== undefined) {
-        const val = Math.max(1, Math.min(30, Number(body.conversation_poll_interval) || 1));
+        const requestedInterval = Number(body.conversation_poll_interval);
+        const val = Number.isFinite(requestedInterval)
+          ? Math.max(1, Math.min(30, requestedInterval)) : 2;
         config.conversation_poll_interval = val;
         // 仅在监听器本次未被显式关闭时才重启（避免与上面的 stop 冲突）
         if (config.conversation_monitor_enabled && monitorAction !== 'stop') {
@@ -315,10 +324,14 @@ export function registerConfigHandlers(
         }
       }
 
-      // 更新 conversation_poll_debug（同步到 debug 模块的缓存，热路径靠它门控日志）
-      if (body.conversation_poll_debug !== undefined) {
-        config.conversation_poll_debug = !!body.conversation_poll_debug;
-        setPollDebug(config.conversation_poll_debug);
+      // 更新 debug_log_enabled（同步到 debug 模块的缓存，热路径靠它门控日志）
+      if (body.debug_log_enabled !== undefined) {
+        config.debug_log_enabled = !!body.debug_log_enabled;
+        setDebugLog(config.debug_log_enabled);
+      }
+
+      if (body.hourly_chime_resume_enabled !== undefined) {
+        config.hourly_chime_resume_enabled = body.hourly_chime_resume_enabled;
       }
 
       // 更新 smart_resume_timeout
@@ -331,10 +344,10 @@ export function registerConfigHandlers(
         config.max_song_index = Math.max(1000, Math.min(100000, Number(body.max_song_index) || 10000));
       }
 
-      // 更新 extra_music_api_models
-      if (body.extra_music_api_models !== undefined) {
-        config.extra_music_api_models = Array.isArray(body.extra_music_api_models)
-          ? body.extra_music_api_models
+      // 更新 music_api_model_disabled（显式禁用 Music API 的型号清单）
+      if (body.music_api_model_disabled !== undefined) {
+        config.music_api_model_disabled = Array.isArray(body.music_api_model_disabled)
+          ? body.music_api_model_disabled
               .filter((m: any) => typeof m === 'string' && m.trim())
               .map((m: string) => m.trim().toUpperCase())
           : [];
@@ -344,6 +357,9 @@ export function registerConfigHandlers(
       if (body.ai_config !== undefined) {
         const aiConfig = await configManager.getAIConfig();
         const newAI = body.ai_config as Record<string, unknown>;
+        if (newAI.custom_headers !== undefined) {
+          aiConfig.custom_headers = validateAIHeaders(newAI.custom_headers);
+        }
         if (typeof newAI.enabled === 'boolean') {
           aiConfig.enabled = newAI.enabled;
         }
@@ -377,6 +393,9 @@ export function registerConfigHandlers(
       }
 
       await configManager.saveConfig(config);
+      if (body.hourly_chime_resume_enabled === false) {
+        voiceEngine.cancelHourlyResumes();
+      }
 
       let memoryWarning = '';
       if (memoryMaxChanged) {

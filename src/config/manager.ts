@@ -16,7 +16,12 @@ import type {
   ScheduledTask,
   TaskLog,
   AIConfig,
+  PlaylistProgress,
+  PlaylistProgressStore,
 } from '../types';
+import { DEFAULT_CHAT_CONFIG, readChatConfig, validateChatConfig } from '../chat/types';
+import type { ChatConfig } from '../chat/types';
+
 import { DEFAULT_MEMORY_MAX_RECORDS, normalizeMemoryMaxRecords } from '../memory/types';
 import { getDefaultVoiceCommands } from '../voicecmd/defaults';
 
@@ -30,12 +35,31 @@ const STORAGE_KEY_SCHEDULE_LOGS = 'schedule_logs';
 const STORAGE_KEY_AI_CONFIG = 'ai_config';
 const STORAGE_KEY_SEARCH_PROVIDERS = 'search_provider_registry';
 const STORAGE_KEY_DEVICE_GROUPS = 'device_groups';
+const STORAGE_KEY_PLAYLIST_PROGRESS = 'playlist_progress';
 
 /** 搜索源候选注册默认搜索子路径 */
 const DEFAULT_SEARCH_PATH = '/api/search/topone';
 
 /** 日志最大条数（环形缓冲） */
 const MAX_SCHEDULE_LOGS = 200;
+
+/**
+ * 每台设备最多记多少个歌单的播放进度。
+ * 进度是每次切歌都要写的热数据，整表以一个 JSON 落在 storage 里，必须有界：
+ * 超出后按 updated_at 淘汰最久没播的歌单（用户几乎不会在 30 个歌单之间来回切）。
+ */
+const MAX_PLAYLIST_PROGRESS_PER_DEVICE = 30;
+
+/**
+ * 歌单进度的作用域键。
+ *
+ * 一律记在「PlaylistManager 的主设备」名下（分组共享主设备的那一份），与
+ * `PlaylistManager.persistState` 写 DeviceConfig 的口径完全一致。调用方拿到的是
+ * 用户点的那台设备，分组时它可能不是主设备，所以要用 `pm.getPrimary()` 的结果来构造。
+ */
+export function playlistProgressScope(accountId: string, deviceId: string): string {
+  return accountId + ':' + deviceId;
+}
 
 /** 默认插件配置 */
 function defaultPluginConfig(): PluginConfig {
@@ -70,9 +94,10 @@ function defaultPluginConfig(): PluginConfig {
     play_announcement_wait_mode: 'auto',
     play_announcement_delay: 3,
     play_announcement_scope: 'voice',
-    conversation_poll_interval: 1,
-    conversation_poll_debug: false,
+    conversation_poll_interval: 2,
+    debug_log_enabled: false,
     smart_resume_timeout: 30,
+    hourly_chime_resume_enabled: false,
     max_song_index: 10000,
     ai_config: defaultAIConfig(),
   };
@@ -84,6 +109,7 @@ function defaultAIConfig(): AIConfig {
     enabled: false,
     api_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
     api_key: '',
+    custom_headers: {},
     model: 'qwen-flash',
     timeout: 6,
   };
@@ -111,6 +137,31 @@ export class ConfigManager {
   //   getConfig 每次返回浅合并的新对象，不暴露缓存引用。
   private accountsCache: Promise<AccountConfig[]> | null = null;
   private configCache: Promise<Partial<PluginConfig>> | null = null;
+  // 歌单进度表：每次切歌都要读改写，不缓存就是每首歌一次多余的 storage.get。
+  // 与上面两个 key 同一套约定（缓存 in-flight Promise + 写穿透）。
+  private playlistProgressCache: Promise<PlaylistProgressStore> | null = null;
+
+  private chatConfigWrite: Promise<unknown> = Promise.resolve();
+
+  async getChatConfig(): Promise<ChatConfig> {
+    await this.chatConfigWrite.catch(() => { });
+    const raw = await songloft.storage.get('chat_config:v1');
+    if (!raw) return validateChatConfig({});
+    try { return readChatConfig(JSON.parse(raw as string)); }
+    catch { throw new Error('AI 对话配置损坏，原配置已保留'); }
+  }
+
+  saveChatConfig(updates: Partial<ChatConfig>): Promise<ChatConfig> {
+    const pending = this.chatConfigWrite.catch(() => { }).then(async () => {
+      const raw = await songloft.storage.get('chat_config:v1');
+      const current = raw ? readChatConfig(JSON.parse(raw as string)) : DEFAULT_CHAT_CONFIG;
+      const next = validateChatConfig(updates, current);
+      await songloft.storage.set('chat_config:v1', JSON.stringify(next));
+      return next;
+    });
+    this.chatConfigWrite = pending;
+    return pending;
+  }
 
   // ===== 通用存储读写 =====
 
@@ -140,11 +191,41 @@ export class ConfigManager {
       this.configCache = this.load<Partial<PluginConfig>>(STORAGE_KEY_CONFIG, {});
     }
     const stored = await this.configCache;
+    // 旧字段 conversation_poll_debug 更名为 debug_log_enabled。只在新字段缺席时
+    // 迁移旧值，确保只走一次；随后清空旧字段并落盘，防止后续再看到残留触发迁移。
+    const legacyPollDebug = (stored as any).conversation_poll_debug;
+    let migratedDebugLog = false;
+    if (stored.debug_log_enabled === undefined && typeof legacyPollDebug === 'boolean') {
+      stored.debug_log_enabled = legacyPollDebug;
+      migratedDebugLog = true;
+    }
+    if ('conversation_poll_debug' in (stored as Record<string, unknown>)) {
+      delete (stored as Record<string, unknown>).conversation_poll_debug;
+      migratedDebugLog = true;
+    }
     const merged = { ...defaultPluginConfig(), ...stored };
     merged.voice_memory_enabled = stored.voice_memory_enabled !== false;
     merged.voice_memory_max_records = normalizeMemoryMaxRecords(stored.voice_memory_max_records);
-    // 惰性迁移：把旧单值外部搜索源归一化为源列表（不写盘，每次读计算）
+    if (migratedDebugLog) {
+      await this.save(STORAGE_KEY_CONFIG, stored);
+      this.configCache = Promise.resolve(stored);
+    }
+    // 旧单值外部搜索源迁移：sources 为空时合成为 legacy 源
     merged.external_search_sources = this.normalizeSearchSources(merged);
+    // 旧单值字段（external_search_url/token，已 @deprecated）一次性别名迁移落盘：
+    // 只要存储里还残留旧字段就清空并写回，否则配置页删除「已迁移的搜索源」后，
+    // 下一次 getConfig 又会从残留旧字段重新合成出该源——表现为删了还冒出来、
+    // 只剩一个源时「删不掉必须保留一个」。合成源写入数组后成为真实条目，可正常删除。
+    if ((merged.external_search_url || '').trim()) {
+      const next: Partial<PluginConfig> = {
+        ...stored,
+        external_search_url: '',
+        external_search_token: '',
+        external_search_sources: merged.external_search_sources,
+      };
+      await this.save(STORAGE_KEY_CONFIG, next);
+      this.configCache = Promise.resolve(next);
+    }
     return merged;
   }
 
@@ -235,6 +316,8 @@ export class ConfigManager {
       throw new Error(`Account not found: ${accountId}`);
     }
     await this.saveAccounts(filtered);
+    // 账号下所有设备的歌单进度一起清掉，否则账号删了进度还在表里占位到永远
+    await this.removePlaylistProgressByAccount(accountId);
   }
 
   // ===== 设备管理（存储层） =====
@@ -264,6 +347,85 @@ export class ConfigManager {
   /** 设置账号最后选中的设备 */
   async setLastSelectedDevice(accountId: string, deviceId: string): Promise<void> {
     await this.updateAccount(accountId, { last_selected_device_id: deviceId });
+  }
+
+  // ===== 歌单播放进度（每设备 × 每歌单） =====
+
+  /**
+   * 读取整张进度表。返回缓存引用（与 getAccounts 同约定）：调用方原地改完必须走
+   * savePlaylistProgressStore 写回。存储内容被写坏（不是对象）时退回空表，不污染调用方。
+   */
+  private async getPlaylistProgressStore(): Promise<PlaylistProgressStore> {
+    if (this.playlistProgressCache === null) {
+      this.playlistProgressCache = this.load<PlaylistProgressStore>(STORAGE_KEY_PLAYLIST_PROGRESS, {});
+    }
+    const store = await this.playlistProgressCache;
+    if (!store || typeof store !== 'object' || Array.isArray(store)) {
+      const empty: PlaylistProgressStore = {};
+      this.playlistProgressCache = Promise.resolve(empty);
+      return empty;
+    }
+    return store;
+  }
+
+  private async savePlaylistProgressStore(store: PlaylistProgressStore): Promise<void> {
+    await this.save(STORAGE_KEY_PLAYLIST_PROGRESS, store);
+    this.playlistProgressCache = Promise.resolve(store);
+  }
+
+  /** 读取某设备在某歌单的播放进度；无有效记录返回 null */
+  async getPlaylistProgress(scopeKey: string, playlistId: number): Promise<PlaylistProgress | null> {
+    if (!scopeKey || !playlistId || playlistId <= 0) return null;
+    const store = await this.getPlaylistProgressStore();
+    const list = store[scopeKey];
+    if (!Array.isArray(list)) return null;
+    const hit = list.find(p => p && p.playlist_id === playlistId && p.song_id > 0);
+    return hit ?? null;
+  }
+
+  /** 写入某设备在某歌单的播放进度（同歌单覆盖，超出上限淘汰最久没播的） */
+  async savePlaylistProgress(scopeKey: string, progress: PlaylistProgress): Promise<void> {
+    if (!scopeKey || !progress || progress.playlist_id <= 0 || progress.song_id <= 0) return;
+    const store = await this.getPlaylistProgressStore();
+    const kept = (Array.isArray(store[scopeKey]) ? store[scopeKey] : [])
+      .filter(p => p && p.playlist_id > 0 && p.song_id > 0 && p.playlist_id !== progress.playlist_id);
+    kept.push(progress);
+    kept.sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
+    store[scopeKey] = kept.slice(0, MAX_PLAYLIST_PROGRESS_PER_DEVICE);
+    await this.savePlaylistProgressStore(store);
+  }
+
+  /** 删除某设备在某歌单的播放进度（歌单 ID 已失效时清理）；无记录则静默 */
+  async removePlaylistProgress(scopeKey: string, playlistId: number): Promise<void> {
+    if (!scopeKey || !playlistId || playlistId <= 0) return;
+    const store = await this.getPlaylistProgressStore();
+    const list = store[scopeKey];
+    if (!Array.isArray(list)) return;
+    const filtered = list.filter(p => !p || p.playlist_id !== playlistId);
+    if (filtered.length === list.length) return;
+    if (filtered.length === 0) {
+      delete store[scopeKey];
+    } else {
+      store[scopeKey] = filtered;
+    }
+    await this.savePlaylistProgressStore(store);
+  }
+
+  /** 删除某账号下所有设备的歌单进度（账号被移除时调用） */
+  async removePlaylistProgressByAccount(accountId: string): Promise<void> {
+    if (!accountId) return;
+    const store = await this.getPlaylistProgressStore();
+    const prefix = accountId + ':';
+    let changed = false;
+    for (const key of Object.keys(store)) {
+      if (key.startsWith(prefix)) {
+        delete store[key];
+        changed = true;
+      }
+    }
+    if (changed) {
+      await this.savePlaylistProgressStore(store);
+    }
   }
 
   // ===== Webhook管理 =====
@@ -349,7 +511,14 @@ export class ConfigManager {
     if (commands.length === 0) {
       return getDefaultVoiceCommands();
     }
-    return commands;
+    // 老用户升级后补齐新增的默认口令（如 play_index、sleep_timer 系列），
+    // 用 type+param 组合去重：set_play_mode 一个 type 对应多个默认条目（random/single/…），
+    // 必须按 param 区分才不会把兄弟条目一起判为"已存在"。仅在读取时合并，不写回存储，
+    // 用户下次在设置页保存时才落盘。
+    const defaults = getDefaultVoiceCommands();
+    const seen = new Set(commands.map(c => `${c.type}::${c.param ?? ''}`));
+    const missing = defaults.filter(d => !seen.has(`${d.type}::${d.param ?? ''}`));
+    return missing.length > 0 ? [...commands, ...missing] : commands;
   }
 
   /** 保存语音口令配置 */

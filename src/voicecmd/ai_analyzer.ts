@@ -4,6 +4,10 @@
 /// <reference types="@songloft/plugin-sdk" />
 
 import type { AIConfig, AIAnalysisResult } from '../types';
+import { aiChatCompletionsUrl } from '../utils/ai_url';
+import { requestAI } from '../utils/ai_request';
+import { aiRequestHeaders } from '../utils/ai_headers';
+import { canDisableDashScopeThinking } from '../utils/ai_thinking';
 
 /** AI System Prompt */
 export const AI_SYSTEM_PROMPT = `你是一个语音指令意图提取器。你的唯一任务是从用户的语音指令中提取操作和音乐信息，并严格只返回纯 JSON 字符串。
@@ -18,6 +22,7 @@ export const AI_SYSTEM_PROMPT = `你是一个语音指令意图提取器。你�
 - play_song: name(歌曲名), artist(歌手名)
 - play_artist: artist(歌手名)
 - play_playlist: playlist(歌单名)
+- play_index: index(整数,从1起,跳到当前歌单的第N首)
 - set_play_mode: mode=order|random|single|loop|singlePlay(播放模式，singlePlay 表示当前歌曲播完停止)
 - favorite: action=add|remove(收藏/取消收藏当前歌曲)
 - sleep_timer: duration(分钟数,整数)或songs_count(曲目数,整数)，两者只填一个。定时停止播放。
@@ -52,26 +57,30 @@ export const AI_SYSTEM_PROMPT = `你是一个语音指令意图提取器。你�
 取消定时→{"action":"cancel_sleep_timer","params":{},"confidence":"high","rawText":"取消定时"}
 还有多久停→{"action":"query_sleep_timer","params":{},"confidence":"high","rawText":"还有多久停"}
 继续播放→{"action":"resume","params":{},"confidence":"high","rawText":"继续播放"}
-恢复播放→{"action":"resume","params":{},"confidence":"high","rawText":"恢复播放"}`;
+恢复播放→{"action":"resume","params":{},"confidence":"high","rawText":"恢复播放"}
+播放第300首→{"action":"play_index","params":{"index":300},"confidence":"high","rawText":"播放第300首"}
+跳到第五十首→{"action":"play_index","params":{"index":50},"confidence":"high","rawText":"跳到第50首"}`;
 
 /**
  * AI 口令分析器
  * 调用 LLM API 分析用户语音指令，提取操作类型和参数
  */
 export class AIAnalyzer {
+  constructor(private schedule?: (run: () => Promise<AIAnalysisResult>, current: () => boolean, scope: string) => Promise<AIAnalysisResult>) { }
   /**
    * 调用 AI 分析用户语音指令（静默模式，失败返回 null）
    * @param query 用户语音文本
    * @param config AI 配置
    * @returns 分析结果，超时或失败返回 null
    */
-  async analyze(query: string, config: AIConfig): Promise<AIAnalysisResult | null> {
+  async analyze(query: string, config: AIConfig, current = () => true, scope = ''): Promise<AIAnalysisResult | null> {
     if (!config.enabled || !config.api_url || !config.api_key) {
       return null;
     }
 
     try {
-      return await this.callAI(query, config);
+      const run = () => this.callAI(query, config);
+      return this.schedule ? await this.schedule(run, current, scope) : await run();
     } catch (e) {
       songloft.log.warn(`[AIAnalyzer] AI analysis failed: ${String(e)}`);
       return null;
@@ -96,7 +105,8 @@ export class AIAnalyzer {
    * 调用 LLM API
    */
   private async callAI(query: string, config: AIConfig): Promise<AIAnalysisResult> {
-    songloft.log.info(`[AIAnalyzer] Calling ${config.api_url} model=${config.model} timeout=${config.timeout}s`);
+    // 与模型列表端点共用同一套 /v1 归一化规则，避免两处对 api_url 的假设不一致
+    const endpoint = aiChatCompletionsUrl(config.api_url);
 
     const systemPrompt = (config.prompt && config.prompt.trim()) ? config.prompt.trim() : AI_SYSTEM_PROMPT;
     const messages = [
@@ -104,97 +114,112 @@ export class AIAnalyzer {
       { role: 'user', content: `用户指令：${query}` },
     ];
 
+    // 省略 token 上限和采样温度，由服务端使用默认值，兼容推理模型及各类代理。
     const body: Record<string, unknown> = {
       model: config.model,
       messages,
-      temperature: 1.0,
-      max_tokens: 300,
       response_format: { type: 'json_object' },
-      extra_body: { reasoning_split: true },
     };
+    // reasoning_split 仅硅基流动（SiliconFlow）原生支持，用于分离推理链使 content 直接是干净 JSON；
+    // 其它 OpenAI 兼容接口对未知字段或忽略或严格 400，故按 api_url 条件附加，避免误伤。
+    if (/siliconflow/i.test(config.api_url || '')) {
+      body.extra_body = { reasoning_split: true };
+    }
 
-    const fetchPromise = fetch(`${config.api_url}/chat/completions`, {
+    // 直接 fetch 的扩展参数必须放在 JSON 顶层；extra_body 是 Python SDK 的透传选项。
+    // 口令提取不需要思考链，Qwen3.7-Flash 等默认思考会耗尽短超时预算（#122）。
+    const thinkingDisabled = canDisableDashScopeThinking(endpoint, config.model);
+    if (thinkingDisabled) body.enable_thinking = false;
+
+    return requestAI(endpoint, {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${config.api_key}`,
-        'Content-Type': 'application/json',
-      },
+      headers: aiRequestHeaders(config),
       body: JSON.stringify(body),
+    }, config.timeout, { kind: 'analysis', model: config.model, thinkingDisabled, queryChars: query.length }, async (resp, requestId) => {
+      if (!resp.ok) {
+        throw new Error(`API error: ${resp.status} ${await resp.text()}`);
+      }
+
+      const data = await resp.json();
+      const message = data.choices?.[0]?.message;
+      const content = message?.content as string | undefined;
+      const finishReason = data.choices?.[0]?.finish_reason as string | undefined;
+      const usage = data.usage;
+      songloft.log.info(`[AIAnalyzer] id=${requestId} finish_reason=${finishReason ?? 'unavailable'} content_chars=${content?.length ?? 0} reasoning_chars=${message?.reasoning_content?.length ?? 0} prompt_tokens=${usage?.prompt_tokens ?? 'unavailable'} completion_tokens=${usage?.completion_tokens ?? 'unavailable'} reasoning_tokens=${usage?.completion_tokens_details?.reasoning_tokens ?? 'unavailable'}`);
+      if (!content) {
+        throw new Error('Empty response from AI API');
+      }
+
+      if (finishReason && finishReason !== 'stop') {
+        songloft.log.warn(`[AIAnalyzer] id=${requestId} content may be truncated`);
+      }
+
+      const result = this.parseResponse(content);
+      songloft.log.info(`[AIAnalyzer] id=${requestId} parsed=true confidence=${result.confidence}`);
+      return result;
     });
-
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error('AI API call timed out')), config.timeout * 1000);
-    });
-
-    let resp: Response;
-    try {
-      resp = await Promise.race([fetchPromise, timeoutPromise]);
-    } catch (e) {
-      songloft.log.warn(`[AIAnalyzer] fetch error: ${String(e)}`);
-      throw e;
-    }
-
-    if (!resp.ok) {
-      throw new Error(`API error: ${resp.status} ${await resp.text()}`);
-    }
-
-    const data = await resp.json();
-    const content = data.choices?.[0]?.message?.content as string | undefined;
-    const finishReason = data.choices?.[0]?.finish_reason as string | undefined;
-    if (!content) {
-      throw new Error('Empty response from AI API');
-    }
-
-    if (finishReason && finishReason !== 'stop') {
-      songloft.log.warn(`[AIAnalyzer] Finish reason: ${finishReason} (content may be truncated)`);
-    }
-
-    songloft.log.info(`[AIAnalyzer] API response: ${content.slice(0, 200)}`);
-    return this.parseResponse(content);
   }
 
   /**
    * 解析 AI 返回的 JSON
    * 兼容 Markdown 代码块 (```json ... ```)、思考标签 (<think>...</think>) 以及前后附带文本的情况
    */
-  private parseResponse(content: string): AIAnalysisResult {
+  parseResponse(content: string): AIAnalysisResult {
     let trimmed = content.trim();
 
     // 1. 去除思考标签及其内部的所有思考过程 (e.g. <think>...</think> 或 [think]...[/think])
     trimmed = trimmed
       .replace(/<(?:think|thought)>[\s\S]*?<\/(?:think|thought)>/gi, '')
       .replace(/\[(?:think|thought)\][\s\S]*?\[\/(?:think|thought)\]/gi, '')
-      .replace(/[\[\]\/?]*(?:think|思考|THINK)[\[\]\/?]*/gi, '')
+      .replace(/[\[\]<>/?]*(?:think|思考|THINK)[\[\]<>/?]*/gi, '')
       .trim();
 
     // 2. 去除外层的 Markdown 代码块包裹 (e.g. ```json\n{...}\n``` 或 ```\n{...}\n```)
     const codeBlockMatch = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
     if (codeBlockMatch) {
       trimmed = codeBlockMatch[1].trim();
+    } else {
+      trimmed = trimmed.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/i, '').trim();
     }
 
     // 3. 优先尝试直接解析整段文本
     try {
       const parsed = JSON.parse(trimmed);
-      return this.formatResult(parsed);
+      if (parsed && typeof parsed === 'object') {
+        return this.formatResult(parsed);
+      }
     } catch {
-      // 忽略，继续兜底提取
+      songloft.log.warn(`[AIAnalyzer] Direct JSON parse failed, content_chars=${content.length}; trying fallback`);
     }
 
     // 4. 兜底提取：在文本中寻找最外层的 '{' 和 '}'
     const firstBrace = trimmed.indexOf('{');
-    const lastBrace = trimmed.lastIndexOf('}');
-    if (firstBrace !== -1 && lastBrace > firstBrace) {
-      const jsonStr = trimmed.slice(firstBrace, lastBrace + 1);
+    if (firstBrace === -1) {
+      throw new Error('No JSON found in response');
+    }
+
+    let end = trimmed.lastIndexOf('}');
+    let jsonStr = '';
+    let parsed: any = null;
+
+    while (end > firstBrace) {
       try {
-        const parsed = JSON.parse(jsonStr);
-        return this.formatResult(parsed);
+        jsonStr = trimmed.slice(firstBrace, end + 1);
+        parsed = JSON.parse(jsonStr);
+        if (parsed && typeof parsed === 'object') {
+          break;
+        }
       } catch {
-        songloft.log.warn(`[AIAnalyzer] Fallback JSON parse failed, extracted: ${jsonStr.slice(0, 300)}`);
+        end = trimmed.lastIndexOf('}', end - 1);
       }
     }
 
-    throw new Error(`Failed to parse AI response: ${trimmed.slice(0, 100)}`);
+    if (!parsed || typeof parsed !== 'object') {
+      songloft.log.warn(`[AIAnalyzer] Fallback JSON parse also failed, extracted_chars=${jsonStr.length}`);
+      throw new Error('Failed to parse AI response');
+    }
+
+    return this.formatResult(parsed);
   }
 
   private formatResult(parsed: any): AIAnalysisResult {

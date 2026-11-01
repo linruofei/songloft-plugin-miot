@@ -7,7 +7,9 @@ import SlIcon from '../../ui/SlIcon.vue';
 import SlInput from '../../ui/SlInput.vue';
 import SlSelect from '../../ui/SlSelect.vue';
 import SlSwitch from '../../ui/SlSwitch.vue';
+import VoiceSectionNav from './voice/VoiceSectionNav.vue';
 import { del, post, pluginWebSocketUrl } from '../../api';
+import { navigation } from '../../runtime';
 import {
   addWebhook,
   clearMemory,
@@ -17,6 +19,7 @@ import {
   loadMemory,
   loadSearchProviders,
   loadVoiceData,
+  managedDevices,
   messageOf,
   notify,
   playlistLabel,
@@ -26,6 +29,16 @@ import {
   state,
 } from '../../store';
 import type { MemoryEntity, SearchSource, SelectOption, VoiceCommand } from '../../types';
+
+const voicePanel = ref<VoicePanel>('listen');
+const voicePanels: Array<{ id: VoicePanel; title: string; subtitle: string; icon: string }> = [
+  { id: 'listen', title: '监听', subtitle: '对话与索引', icon: 'record_voice_over' },
+  { id: 'commands', title: '口令', subtitle: '规则与测试', icon: 'mic' },
+  { id: 'memory', title: '记忆', subtitle: '命中与歧义', icon: 'memory' },
+  { id: 'intelligence', title: '搜索', subtitle: '外部搜索源', icon: 'auto_awesome' },
+];
+
+type VoicePanel = 'listen' | 'commands' | 'memory' | 'intelligence';
 
 interface CommandTestResult {
   matched: boolean;
@@ -43,6 +56,7 @@ const commandLabels: Record<string, string> = {
   play_playlist: '播放歌单',
   play_artist: '播放歌手',
   play_song: '播放歌曲',
+  play_index: '播放指定序号',
   set_play_mode: '播放模式',
   set_volume: '音量控制',
   favorite: '收藏歌曲',
@@ -57,6 +71,7 @@ const commandIcons: Record<string, string> = {
   play_playlist: 'queue_music',
   play_artist: 'artist',
   play_song: 'music_note',
+  play_index: 'format_list_numbered',
   set_play_mode: 'repeat',
   set_volume: 'volume_up',
   favorite: 'favorite',
@@ -115,9 +130,6 @@ const commandTestQuery = ref('');
 const commandTestResult = ref('');
 const commandTestSuccess = ref(false);
 const commandTestBusy = ref(false);
-const aiTestQuery = ref('');
-const aiTestResult = ref('');
-const aiTestBusy = ref(false);
 const sourceTestQuery = ref('');
 const sourceTestResult = ref('');
 const selectedProviderId = ref('');
@@ -144,12 +156,46 @@ function providerKey(provider: { id?: string; entry_path?: string; entryPath?: s
   return String(provider.id || provider.entry_path || provider.entryPath || provider.name);
 }
 
-function fillSourceFromProvider(providerId: string): void {
+const showManualAdd = ref(false);
+
+/**
+ * 快速选择已安装搜索源：选择即添加/启用，直达可用，无需再手动填表单点添加。
+ * 幂等——按 URL 匹配已配置源：已存在则确保启用，不存在则新增一条启用状态的源。
+ */
+async function applyProvider(providerId: string): Promise<void> {
+  if (!providerId) return;
   const provider = state.searchProviders.find((item) => providerKey(item) === providerId);
   if (!provider) return;
-  selectedProviderId.value = providerId;
-  newSourceName.value = provider.name;
-  newSourceUrl.value = provider.url || provider.search_path || provider.searchPath || '/api/search/topone';
+  const url = (provider.url || '/api/search/topone').trim();
+  const displayName = provider.name || url;
+  const existing = state.config.external_search_sources.find((s) => (s.url || '').trim() === url);
+  try {
+    if (existing) {
+      if (!existing.enabled) {
+        const sources = state.config.external_search_sources.map((s) =>
+          s.id === existing.id ? { ...s, enabled: true } : s,
+        );
+        if (sourceDrafts[existing.id]) sourceDrafts[existing.id].enabled = true;
+        await saveConfig({ external_search_sources: sources });
+        notify(`已启用搜索源「${existing.name || displayName}」`, 'success');
+      } else {
+        notify(`搜索源「${existing.name || displayName}」已在配置中`, 'success');
+      }
+    } else {
+      const source: SearchSource = {
+        id: `src_${Date.now()}`,
+        name: displayName,
+        url,
+        token: '',
+        enabled: true,
+      };
+      const sources = [...state.config.external_search_sources, source];
+      sourceDrafts[source.id] = { ...source };
+      await saveConfig({ external_search_sources: sources });
+      notify(`已添加搜索源「${displayName}」`, 'success');
+    }
+  } catch { /* saveConfig presents the error */ }
+  selectedProviderId.value = '';
 }
 
 const selectableSearchProviders = computed(() => state.searchProviders);
@@ -166,7 +212,6 @@ syncSourceDrafts();
 onMounted(async () => {
   await Promise.all([loadVoiceData(), loadSearchProviders()]);
   syncSourceDrafts();
-  if (selectableSearchProviders.value.length) fillSourceFromProvider(providerKey(selectableSearchProviders.value[0]));
   if (state.config.conversation_monitor_enabled) connectConversation();
 });
 onUnmounted(() => {
@@ -234,7 +279,7 @@ async function setCommandEnabled(index: number, enabled: boolean): Promise<void>
 }
 
 async function resetCommands(): Promise<void> {
-  if (!(await confirmAction('恢复默认口令', '当前自定义口令词会被默认配置覆盖。', '恢复默认'))) return;
+  if (!(await confirmAction('恢复默认口令', '当前自定义口令词会被默认配置覆盖。', '恢复默认')).confirmed) return;
   commandSaving.value = true;
   try {
     await saveVoiceCommands([]);
@@ -251,11 +296,11 @@ async function setConversationEnabled(enabled: boolean): Promise<void> {
   const patch = enabled
     ? { conversation_monitor_enabled: true }
     : {
-        conversation_monitor_enabled: false,
-        voice_command_enabled: false,
-        external_search_enabled: false,
-        ai_config: { ...state.config.ai_config, enabled: false },
-      };
+      conversation_monitor_enabled: false,
+      voice_command_enabled: false,
+      external_search_enabled: false,
+      ai_config: { ...state.config.ai_config, enabled: false },
+    };
   try {
     await saveConfig(patch);
     enabled ? connectConversation() : disconnectConversation();
@@ -270,21 +315,11 @@ async function setVoiceEnabled(enabled: boolean): Promise<void> {
   const patch = enabled
     ? { voice_command_enabled: true }
     : {
-        voice_command_enabled: false,
-        external_search_enabled: false,
-        ai_config: { ...state.config.ai_config, enabled: false },
-      };
+      voice_command_enabled: false,
+      external_search_enabled: false,
+      ai_config: { ...state.config.ai_config, enabled: false },
+    };
   try { await saveConfig(patch); } catch { /* saveConfig presents the error */ }
-}
-
-async function setAIEnabled(enabled: boolean): Promise<void> {
-  if (enabled && !state.config.voice_command_enabled) {
-    notify('请先开启语音口令', 'warning');
-    return;
-  }
-  try {
-    await saveConfig({ ai_config: { ...state.config.ai_config, enabled } });
-  } catch { /* saveConfig presents the error */ }
 }
 
 async function setExternalSearchEnabled(enabled: boolean): Promise<void> {
@@ -390,7 +425,7 @@ async function addHook(): Promise<void> {
 }
 
 async function removeHook(id: string): Promise<void> {
-  if (!(await confirmAction('删除 Webhook', '确定删除这个回调地址吗？', '删除', true))) return;
+  if (!(await confirmAction('删除 Webhook', '确定删除这个回调地址吗？', '删除', true)).confirmed) return;
   try { await deleteWebhook(id); } catch (error) { notify(messageOf(error), 'error'); }
 }
 
@@ -439,74 +474,11 @@ async function testCommand(): Promise<void> {
   }
 }
 
-const DEFAULT_AI_PROMPT = `你是一个语音指令意图提取器。你的唯一任务是从用户的语音指令中提取操作和音乐信息，并严格只返回纯 JSON 字符串。
-
-【极重要格式约束】：
-1. 绝对不要使用 Markdown 代码块包裹（严禁输出 \`\`\`json 或 \`\`\`）。
-2. 绝对不要输出任何额外的解释、问候语、分析过程或标点符号。
-3. 输出必须以 "{" 开头，以 "}" 结尾，且是严格合法的标准 JSON 字符串。
-4. 返回结构：{"action":"...","params":{...},"confidence":"high|medium|low","rawText":"有效文本"}
-
-行为和参数（只允许使用以下参数，不要自定义新字段）：
-- play_song: name(歌曲名), artist(歌手名)
-- play_artist: artist(歌手名)
-- play_playlist: playlist(歌单名)
-- set_play_mode: mode=order|random|single|loop|singlePlay(播放模式，singlePlay 表示当前歌曲播完停止)
-- favorite: action=add|remove(收藏/取消收藏当前歌曲)
-- sleep_timer: duration(分钟数,整数)或songs_count(曲目数,整数)，两者只填一个。定时停止播放。
-- cancel_sleep_timer: 取消定时停止
-- query_sleep_timer: 查询定时剩余时间
-- next/previous/stop/unknown
-
-规则：
-1. "XX的YY"中XX是歌手名则artist=XX,name=YY，否则整句为歌名（如"你的答案"→name）
-2. 多歌手用逗号分隔。如"林俊杰、金莎的被风吹过的夏天"→name="被风吹过的夏天",artist="林俊杰,金莎"
-3. 翻唱以演唱者（翻唱者）为artist，原唱忽略。如"陈奕迅翻唱周杰伦的淘汰"→name="淘汰",artist="陈奕迅"
-4. "来一首"等同于"播放"，划入play_song
-5. 明确high模糊low其余medium
-6. rawText去语气词、口癖词
-7. "播放XX的歌/歌曲/音乐"或"来几首XX"中，name为泛称（歌/歌曲/音乐/曲/曲子）或无name时→action=play_artist,artist=XX。name为具体歌名时仍为play_song
-
-示例：
-周杰伦的晴天→{"action":"play_song","params":{"name":"晴天","artist":"周杰伦"},"confidence":"high","rawText":"周杰伦 晴天"}
-邓紫棋翻唱周杰伦的龙卷风→{"action":"play_song","params":{"name":"龙卷风","artist":"邓紫棋"},"confidence":"high","rawText":"龙卷风 邓紫棋"}
-播放周杰伦的歌→{"action":"play_artist","params":{"artist":"周杰伦"},"confidence":"high","rawText":"周杰伦"}
-我想听林俊杰的歌曲→{"action":"play_artist","params":{"artist":"林俊杰"},"confidence":"high","rawText":"林俊杰"}
-来几首邓紫棋→{"action":"play_artist","params":{"artist":"邓紫棋"},"confidence":"high","rawText":"邓紫棋"}
-随机播放→{"action":"set_play_mode","params":{"mode":"random"},"confidence":"high","rawText":"随机播放"}
-收藏这首歌→{"action":"favorite","params":{"action":"add"},"confidence":"high","rawText":"收藏这首歌"}
-取消收藏→{"action":"favorite","params":{"action":"remove"},"confidence":"high","rawText":"取消收藏"}
-半小时后停止播放→{"action":"sleep_timer","params":{"duration":30},"confidence":"high","rawText":"半小时后停止播放"}
-30分钟后关闭→{"action":"sleep_timer","params":{"duration":30},"confidence":"high","rawText":"30分钟后关闭"}
-一个半小时后停→{"action":"sleep_timer","params":{"duration":90},"confidence":"high","rawText":"一个半小时后停"}
-再听3首就停→{"action":"sleep_timer","params":{"songs_count":3},"confidence":"high","rawText":"再听3首就停"}
-5首歌后停止播放→{"action":"sleep_timer","params":{"songs_count":5},"confidence":"high","rawText":"5首歌后停止播放"}
-取消定时→{"action":"cancel_sleep_timer","params":{},"confidence":"high","rawText":"取消定时"}
-还有多久停→{"action":"query_sleep_timer","params":{},"confidence":"high","rawText":"还有多久停"}`;
-
-async function resetAIPrompt(): Promise<void> {
-  const confirmed = await confirmAction('恢复默认提示词', '确定要将 AI 系统的提示词重置为默认值吗？');
-  if (!confirmed) return;
-  state.config.ai_config.prompt = DEFAULT_AI_PROMPT;
-  await saveConfig({ ai_config: state.config.ai_config });
-  notify('已恢复默认提示词', 'success');
-}
-
-async function testAI(): Promise<void> {
-  if (!aiTestQuery.value.trim()) return;
-  aiTestBusy.value = true;
-  try {
-    const result = await post<Record<string, unknown>>('/voice-commands/ai-test', { query: aiTestQuery.value.trim() });
-    aiTestResult.value = JSON.stringify(result, null, 2);
-  } catch (error) {
-    aiTestResult.value = messageOf(error);
-  } finally {
-    aiTestBusy.value = false;
-  }
-}
-
 async function addSource(): Promise<void> {
-  if (!newSourceUrl.value.trim()) return;
+  if (!newSourceUrl.value.trim()) {
+    notify('请填写接口 URL', 'warning');
+    return;
+  }
   const source: SearchSource = {
     id: `src_${Date.now()}`,
     name: newSourceName.value.trim() || newSourceUrl.value.trim(),
@@ -520,12 +492,16 @@ async function addSource(): Promise<void> {
   newSourceUrl.value = '';
   newSourceToken.value = '';
   await saveConfig({ external_search_sources: sources });
+  showManualAdd.value = false;
+  notify(`已添加搜索源「${source.name}」`, 'success');
 }
 
 async function removeSource(id: string): Promise<void> {
+  const removed = state.config.external_search_sources.find((source) => source.id === id);
   const sources = state.config.external_search_sources.filter((source) => source.id !== id);
   delete sourceDrafts[id];
   await saveConfig({ external_search_sources: sources });
+  if (removed) notify(`已移除搜索源「${removed.name || removed.url}」`, 'success');
 }
 
 async function saveSources(): Promise<void> {
@@ -566,6 +542,9 @@ async function refreshSearchProviders(): Promise<void> {
   if (selectedProviderId.value && !selectableSearchProviders.value.some((provider) => providerKey(provider) === selectedProviderId.value)) {
     selectedProviderId.value = '';
   }
+  notify(state.searchProviders.length
+    ? `已刷新，发现 ${state.searchProviders.length} 个已安装搜索源`
+    : '已刷新，暂未发现已安装搜索源', 'success');
 }
 
 function memoryAliases(entity: MemoryEntity): Array<{ id?: string; query?: string; alias?: string }> {
@@ -573,7 +552,7 @@ function memoryAliases(entity: MemoryEntity): Array<{ id?: string; query?: strin
 }
 
 async function deleteMemoryEntity(key: string, title: string): Promise<void> {
-  if (!(await confirmAction('删除语音记忆', `确定删除“${title}”的全部记忆吗？`, '删除', true))) return;
+  if (!(await confirmAction('删除语音记忆', `确定删除"${title}"的全部记忆吗？`, '删除', true)).confirmed) return;
   try {
     await del(`/memory/entity?canonicalKey=${encodeURIComponent(key)}`);
     await ensureMemoryLoaded(true);
@@ -767,18 +746,28 @@ async function submitEditAlias() {
 </script>
 
 <template>
+  <VoiceSectionNav v-model="voicePanel" :panels="voicePanels" />
+
+  <div v-show="voicePanel === 'listen'" class="voice-panel" data-voice-panel="listen">
   <SectionCard title="对话监听" icon="record_voice_over" description="监听已启用管理的音箱对话记录，并把语音内容交给语音引擎。">
     <SettingRow title="启用对话监听" subtitle="关闭后会同时关闭语音口令、AI 分析和外部搜索">
-      <SlSwitch :model-value="state.config.conversation_monitor_enabled" @update:model-value="setConversationEnabled" />
+      <SlSwitch aria-label="启用对话监听" :model-value="state.config.conversation_monitor_enabled" @update:model-value="setConversationEnabled" />
     </SettingRow>
     <div class="form-body">
       <div class="field-grid">
-        <div class="field"><label class="field-label">轮询间隔（秒）</label><SlInput :model-value="pollInterval" type="number" @update:model-value="pollInterval = $event" @change="saveNumber('conversation_poll_interval', pollInterval, 1, 30)" /></div>
-        <div class="field setting-field-control"><label class="field-label">调试日志</label><SlSwitch :model-value="state.config.conversation_poll_debug" @update:model-value="setSwitch('conversation_poll_debug', $event)" /></div>
+        <div class="field">
+          <label class="field-label">轮询间隔（秒）</label>
+          <SlInput :model-value="pollInterval" type="number" @update:model-value="pollInterval = $event" @change="saveNumber('conversation_poll_interval', pollInterval, 1, 30)" />
+          <p class="field-help">默认 2 秒，可设 1～30 秒。无新对话时逐步延长到 5 秒，所设间隔超过 5 秒时保持该值；收到新对话后恢复所设间隔。</p>
+        </div>
+        <div class="field setting-field-control"><label class="field-label">调试日志</label><SlSwitch :model-value="state.config.debug_log_enabled" @update:model-value="setSwitch('debug_log_enabled', $event)" /></div>
       </div>
       <div v-if="state.config.conversation_monitor_enabled" class="status-panel status-panel-inset">
-        <div class="status-chips"><span class="chip chip-success">{{ conversationSocket ? 'WebSocket 已连接' : '轮询回落中' }}</span><span class="chip">{{ state.conversationMessages.length }} 条最近记录</span></div>
+        <div class="status-chips"><span class="chip chip-success">{{ conversationSocket ? 'WebSocket 已连接' : '轮询回落中' }}</span><span class="chip" :class="managedDevices.length ? 'chip-success' : 'chip-warning'">{{ managedDevices.length }} 台受管理设备</span><span class="chip">{{ state.conversationMessages.length }} 条最近记录</span></div>
       </div>
+      <!-- 「开关打开但没勾任何设备」是最容易踩的坑：口令测试正常但对话监听永远拿不到消息
+           （songloft-org/songloft-plugin-miot#104）——只轮询 managed 设备，未勾选就整台都不进池 -->
+      <div v-if="state.config.conversation_monitor_enabled && !managedDevices.length" class="dependency-hint"><SlIcon name="warning" :size="18" /><span>尚未勾选任何受管理设备，对话监听不会工作。请到"设备设置"勾选要监听的音箱。</span></div>
       <div class="field-actions"><SlButton variant="text" label="刷新记录" icon="refresh" @click="refreshConversation" /></div>
     </div>
     <div class="form-body">
@@ -810,12 +799,14 @@ async function submitEditAlias() {
       <div class="field-actions"><SlButton variant="outlined" label="刷新索引" icon="refresh" @click="refreshIndex" /></div>
     </div>
   </SectionCard>
+  </div>
 
+  <div v-show="voicePanel === 'commands'" class="voice-panel" data-voice-panel="commands">
   <SectionCard title="语音口令" icon="mic" description="为每种操作维护可识别的口令词；添加、删除和启停都会立即保存。">
     <SettingRow title="启用语音口令" :subtitle="state.config.conversation_monitor_enabled ? '将对话监听结果交给播放器执行' : '需要先开启对话监听'">
-      <SlSwitch :model-value="state.config.voice_command_enabled" :disabled="!state.config.conversation_monitor_enabled" @update:model-value="setVoiceEnabled" />
+      <SlSwitch aria-label="启用语音口令" :model-value="state.config.voice_command_enabled" :disabled="!state.config.conversation_monitor_enabled" @update:model-value="setVoiceEnabled" />
     </SettingRow>
-    <div v-if="!state.config.conversation_monitor_enabled" class="dependency-hint"><SlIcon name="warning" :size="18" /><span>需要先开启“对话监听”才能使用语音口令。</span></div>
+    <div v-if="!state.config.conversation_monitor_enabled" class="dependency-hint"><SlIcon name="warning" :size="18" /><span>需要先开启"对话监听"才能使用语音口令。</span></div>
     <div v-if="state.config.voice_command_enabled" class="dependency-hint"><SlIcon name="info" :size="18" /><span>口令触发后，音箱会先播完自身的语音回复，再由插件打断并开始播放，中间会有短暂延迟。</span></div>
     <div class="form-body">
       <button type="button" class="advanced-toggle" @click="voiceCommandsExpanded = !voiceCommandsExpanded">
@@ -855,16 +846,18 @@ async function submitEditAlias() {
       <pre v-if="commandTestResult" class="result-pre" :class="commandTestSuccess ? 'result-success' : 'result-error'">{{ commandTestResult }}</pre>
     </div>
   </SectionCard>
+  </div>
 
+  <div v-show="voicePanel === 'memory'" class="voice-panel" data-voice-panel="memory">
   <SectionCard title="语音记忆" icon="memory" description="记录用户说法与歌曲实体的对应关系，减少重复 AI 分析。">
-    <SettingRow title="启用语音记忆" subtitle="关闭后保留历史记忆，但不再写入新记录"><SlSwitch :model-value="state.config.voice_memory_enabled" @update:model-value="setSwitch('voice_memory_enabled', $event)" /></SettingRow>
+    <SettingRow title="启用语音记忆" subtitle="关闭后保留历史记忆，但不再写入新记录"><SlSwitch aria-label="启用语音记忆" :model-value="state.config.voice_memory_enabled" @update:model-value="setSwitch('voice_memory_enabled', $event)" /></SettingRow>
     <div class="form-body">
       <button type="button" class="advanced-toggle" @click="toggleMemoryExpanded">
         <span>{{ memoryExpanded ? '收起语音记忆' : '展开语音记忆' }}</span>
         <SlIcon :name="memoryExpanded ? 'expand_less' : 'expand_more'" :size="20" />
       </button>
       <div v-if="memoryExpanded" class="sub-panel memory-list">
-        <div class="field"><label class="field-label">最大记忆数量（10-500）</label><SlInput :model-value="maxMemory" type="number" @update:model-value="maxMemory = $event" @change="saveNumber('voice_memory_max_records', maxMemory, 10, 500)" /></div>
+        <div class="field"><label class="field-label">自动学习记忆上限（10-5000）</label><SlInput :model-value="maxMemory" type="number" @update:model-value="maxMemory = $event" @change="saveNumber('voice_memory_max_records', maxMemory, 10, 5000)" /><p class="field-help">手动添加的别名不计入此上限，也不会被自动淘汰。</p></div>
         <div class="status-chips"><span class="chip">已保存 {{ state.memoryStats.recordCount || state.memoryStats.queryCount || 0 }} 条</span><span class="chip">已学习 {{ state.memoryStats.entityCount || 0 }} 首</span><span class="chip">本地命中 {{ state.memoryStats.localHitCount || state.memoryStats.hitCount || 0 }} 次</span></div>
         <div class="field-actions">
           <SlButton variant="filled" label="新增记忆" icon="add" @click="openAddEntityModal" />
@@ -991,10 +984,12 @@ async function submitEditAlias() {
       </div>
     </div>
   </SectionCard>
+  </div>
 
+  <div v-show="voicePanel === 'intelligence'" class="voice-panel" data-voice-panel="intelligence">
   <SectionCard title="外部搜索" icon="search" description="本地曲库未命中时，按优先级调用已启用的搜索源。">
-    <SettingRow title="启用外部搜索" :subtitle="state.config.voice_command_enabled ? '搜索源需要返回 topone 格式结果' : '需要先开启语音口令'"><SlSwitch :model-value="state.config.external_search_enabled" :disabled="!state.config.voice_command_enabled" @update:model-value="setExternalSearchEnabled" /></SettingRow>
-    <div v-if="!state.config.voice_command_enabled" class="dependency-hint"><SlIcon name="warning" :size="18" /><span>需要先开启“语音口令”才能使用外部搜索。</span></div>
+    <SettingRow title="启用外部搜索" :subtitle="state.config.voice_command_enabled ? '搜索源需要返回 topone 格式结果' : '需要先开启语音口令'"><SlSwitch aria-label="启用外部搜索" :model-value="state.config.external_search_enabled" :disabled="!state.config.voice_command_enabled" @update:model-value="setExternalSearchEnabled" /></SettingRow>
+    <div v-if="!state.config.voice_command_enabled" class="dependency-hint"><SlIcon name="warning" :size="18" /><span>需要先开启"语音口令"才能使用外部搜索。</span></div>
     <div class="form-body">
       <div class="field"><label class="field-label">搜索优先级</label><SlSelect :model-value="state.config.search_priority" :options="searchPriorityOptions" aria-label="搜索优先级" @update:model-value="saveConfig({ search_priority: $event as 'parallel' | 'local_first' | 'external_first' })" /></div>
       <div class="field-grid"><div class="field"><label class="field-label">超时（秒）</label><SlInput :model-value="externalSearchTimeout" type="number" aria-label="外部搜索超时" @update:model-value="externalSearchTimeout = $event" @change="saveConfig({ external_search_timeout: Math.max(3, Math.min(60, Number(externalSearchTimeout) || 6)) })" /></div><div class="field setting-field-control"><label class="field-label">不入库直接播放</label><SlSwitch :model-value="state.config.external_search_no_import" @update:model-value="setSwitch('external_search_no_import', $event)" /></div></div>
@@ -1004,61 +999,43 @@ async function submitEditAlias() {
         <div class="field">
           <label class="field-label">快速选择</label>
           <SlSelect
-            v-model="selectedProviderId"
+            :model-value="selectedProviderId"
             :options="searchProviderOptions"
             allow-empty
-            placeholder="选择已安装搜索源"
+            placeholder="选择后立即添加/启用"
             aria-label="选择已安装搜索源"
-            @update:model-value="fillSourceFromProvider($event)"
+            @update:model-value="applyProvider"
           />
         </div>
         <div class="field setting-field-control">
           <label class="field-label">操作</label>
           <div class="field-actions field-actions-tight">
             <SlButton variant="outlined" label="刷新" icon="refresh" @click="refreshSearchProviders" />
-            <SlButton variant="outlined" label="填入" icon="download" :disabled="!selectedProviderId" @click="fillSourceFromProvider(selectedProviderId)" />
           </div>
         </div>
       </div>
       <h3 class="card-title section-subtitle">已配置源</h3>
       <div v-for="source in state.config.external_search_sources" :key="source.id" class="sub-panel sub-panel-inset">
         <!-- 各包一层 .field 是为了拿到与其它表单行一致的 16px 行距：.field-grid 的
-             row-gap 是 0，裸 input 会挤在一起。这一行在 APP 里整体不显示的根因是
-             WebF 不绘制 grid 容器，已在 style.css 把 .field-grid 改成 flex
-             （songloft-org/songloft-plugin-miot#79）。 -->
+             row-gap 是 0，裸 input 会挤在一起。.field-grid 用 flex 而非 grid 的
+             原因见 style.css（songloft-org/songloft-plugin-miot#79）。 -->
         <div class="field-grid"><div class="field"><SlInput v-model="sourceDrafts[source.id].name" placeholder="显示名称" /></div><div class="field"><SlInput v-model="sourceDrafts[source.id].url" placeholder="接口地址" /></div></div>
         <SlInput v-model="sourceDrafts[source.id].token" type="password" placeholder="Bearer Token（可选）" />
-        <SettingRow title="启用此源"><SlSwitch v-model="sourceDrafts[source.id].enabled" /></SettingRow>
+        <SettingRow title="启用此源"><SlSwitch v-model="sourceDrafts[source.id].enabled" :aria-label="`启用搜索源 ${sourceDrafts[source.id].name || source.id}`" /></SettingRow>
         <div class="field-actions"><SlButton variant="text" label="移除" icon="delete" @click="removeSource(source.id)" /></div>
       </div>
-      <div class="sub-panel sub-panel-inset"><div class="field-grid"><div class="field"><SlInput v-model="newSourceName" placeholder="新源名称" /></div><div class="field"><SlInput v-model="newSourceUrl" placeholder="接口 URL" /></div></div><SlInput v-model="newSourceToken" type="password" placeholder="Token（可选）" /><div class="field-actions"><SlButton variant="outlined" label="添加搜索源" icon="add" @click="addSource" /><SlButton variant="filled" label="保存全部" icon="save" @click="saveSources" /></div></div>
+      <div v-if="!state.config.external_search_sources.length" class="empty-state">暂无已配置源，从上方「快速选择」添加，或手动添加</div>
+      <div class="field-actions">
+        <SlButton variant="outlined" label="手动添加搜索源" icon="add" @click="showManualAdd = !showManualAdd" />
+        <SlButton variant="filled" label="保存全部" icon="save" @click="saveSources" />
+      </div>
+      <div v-if="showManualAdd" class="sub-panel sub-panel-inset"><div class="field-grid"><div class="field"><SlInput v-model="newSourceName" placeholder="新源名称" /></div><div class="field"><SlInput v-model="newSourceUrl" placeholder="接口 URL" /></div></div><SlInput v-model="newSourceToken" type="password" placeholder="Token（可选）" /><div class="field-actions"><SlButton variant="outlined" label="添加" icon="add" @click="addSource" /><SlButton variant="text" label="取消" @click="showManualAdd = false" /></div></div>
       <div class="field"><label class="field-label">接口测试</label><div class="inline-fields"><SlInput v-model="sourceTestQuery" placeholder="输入测试关键字" @submit="testSource" /><SlButton variant="outlined" label="测试" @click="testSource" /></div><pre v-if="sourceTestResult" class="result-pre">{{ sourceTestResult }}</pre></div>
     </div>
   </SectionCard>
 
-  <SectionCard title="AI 口令分析" icon="auto_awesome" description="可选的 OpenAI 兼容接口，用于解析复杂自然语言口令。">
-    <SettingRow title="启用 AI 分析" :subtitle="state.config.voice_command_enabled ? '规则和记忆未命中时再调用 AI' : '需要先开启语音口令'"><SlSwitch :model-value="!!state.config.ai_config.enabled" :disabled="!state.config.voice_command_enabled" @update:model-value="setAIEnabled" /></SettingRow>
-    <div v-if="!state.config.voice_command_enabled" class="dependency-hint"><SlIcon name="warning" :size="18" /><span>需要先开启“语音口令”才能使用 AI 分析。</span></div>
-    <div class="form-body">
-      <div class="field"><label class="field-label">API 地址</label><SlInput :model-value="state.config.ai_config.api_url || ''" placeholder="https://api.example.com/v1" @update:model-value="state.config.ai_config.api_url = $event" @change="saveConfig({ ai_config: state.config.ai_config })" /></div>
-      <div class="field"><label class="field-label">API Key</label><SlInput :model-value="state.config.ai_config.api_key || ''" type="password" placeholder="sk-..." @update:model-value="state.config.ai_config.api_key = $event" @change="saveConfig({ ai_config: state.config.ai_config })" /></div>
-      <div class="field-grid"><div class="field"><label class="field-label">模型</label><SlInput :model-value="state.config.ai_config.model || ''" placeholder="qwen-flash" @update:model-value="state.config.ai_config.model = $event" @change="saveConfig({ ai_config: state.config.ai_config })" /></div><div class="field"><label class="field-label">超时（秒）</label><SlInput :model-value="String(state.config.ai_config.timeout || 6)" type="number" @update:model-value="state.config.ai_config.timeout = Math.max(1, Math.min(30, Number($event) || 6))" @change="saveConfig({ ai_config: state.config.ai_config })" /></div></div>
-      <div class="field">
-        <div class="field-header-row">
-          <label class="field-label">系统提示词 (System Prompt)</label>
-          <SlButton variant="text" label="恢复默认" icon="restart_alt" @click="resetAIPrompt" />
-        </div>
-        <textarea
-          class="sl-textarea"
-          :value="state.config.ai_config.prompt !== undefined && state.config.ai_config.prompt !== '' ? state.config.ai_config.prompt : DEFAULT_AI_PROMPT"
-          placeholder="留空时自动使用默认提示词"
-          rows="8"
-          @input="state.config.ai_config.prompt = ($event.target as HTMLTextAreaElement).value"
-          @change="saveConfig({ ai_config: state.config.ai_config })"
-        />
-        <div class="field-help">支持自定义指令行为、参数提取规则与少量样本示例，修改后实时保存生效。</div>
-      </div>
-      <div class="command-test-panel command-test-panel-inset"><strong>AI 分析测试</strong><div class="inline-fields"><SlInput v-model="aiTestQuery" placeholder="输入自然语言口令" @submit="testAI" /><SlButton variant="outlined" label="测试分析" icon="science" :disabled="aiTestBusy" @click="testAI" /></div><pre v-if="aiTestResult" class="result-pre">{{ aiTestResult }}</pre></div>
-    </div>
+  <SectionCard title="AI 设置" icon="auto_awesome" description="模型连接、口令分析、AI 对话和长期记忆在同一处配置。">
+    <div class="form-body"><SlButton label="打开 AI 设置" icon="auto_awesome" variant="outlined" @click="navigation.settingsCategory = 'ai'" /></div>
   </SectionCard>
+  </div>
 </template>

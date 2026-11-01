@@ -4,6 +4,7 @@
 /// <reference types="@songloft/plugin-sdk" />
 
 import { segmentQuery, toPinyin } from './segmenter';
+import { traditionalToSimplifiedMap } from '../data/traditional-to-simplified-map';
 
 // ===== 类型定义 =====
 
@@ -13,7 +14,7 @@ export interface IndexedSong {
   title: string;
   artist: string;
   album: string;
-  titleLower: string;   // 归一化匹配键（小写+剥装饰标点），字段名沿用 Lower
+  titleLower: string;   // 归一化匹配键（简体+小写+剥装饰标点），字段名沿用 Lower
   artistLower: string;  // 归一化匹配键
   albumLower: string;   // 归一化匹配键
   titlePinyin: string;  // 拼音（无声调、空格分隔）用于同音字匹配
@@ -174,12 +175,6 @@ function fuzzyScoreLower(keywordLower: string, candidateLower: string): number {
   return 0;
 }
 
-/** 薄包装：接收原始大小写字符串，供 playlist 等非热路径使用。 */
-function fuzzyScore(keyword: string, candidate: string): number {
-  if (!keyword || !candidate) return 0;
-  return fuzzyScoreLower(keyword.toLowerCase(), candidate.toLowerCase());
-}
-
 /**
  * 对候选列表进行模糊搜索，支持分词（空格分隔的所有词都需匹配）
  * 返回按得分降序排列的匹配结果
@@ -189,6 +184,7 @@ function fuzzySearchList<T>(
   items: T[],
   getText: (item: T) => string,
   limit: number,
+  normalizeText: (text: string) => string = text => text.toLowerCase(),
 ): T[] {
   if (!query || items.length === 0) return [];
 
@@ -202,26 +198,26 @@ function fuzzySearchList<T>(
   const scored: ScoredResult<T>[] = [];
 
   for (const item of items) {
-    const text = getText(item);
+    const textLower = normalizeText(getText(item));
 
     if (terms.length === 1) {
       // 单词直接评分
-      const score = fuzzyScore(terms[0], text);
+      const score = fuzzyScoreLower(normalizeText(terms[0]), textLower);
       if (score > 0) {
         scored.push({ item, score });
       }
     } else {
       // 多词搜索：所有词都需要在目标中出现（子串包含），取最低分
-      const textLower = text.toLowerCase();
       let allMatch = true;
       let minScore = Infinity;
 
       for (const term of terms) {
-        if (!textLower.includes(term.toLowerCase())) {
+        const termLower = normalizeText(term);
+        if (!textLower.includes(termLower)) {
           allMatch = false;
           break;
         }
-        const s = fuzzyScore(term, text);
+        const s = fuzzyScoreLower(termLower, textLower);
         if (s < minScore) minScore = s;
       }
 
@@ -323,12 +319,13 @@ function getCachedPinyin(text: string): string {
 }
 
 /**
- * 匹配用归一化：转小写并剥离空格、装饰性括号与标点。
+ * 匹配用归一化：繁体折叠为简体、转小写并剥离空格、装饰性括号与标点。
+ * 查询与索引使用同一静态字表，避免简繁差异被字面校验拒绝；不放宽同音字匹配。
  * 使「明天，你好」「《明天你好》」「【Hi-res】」这类装饰标题能与纯歌名 query 连续子串比对
  * （例如外部搜索导入的 B 站装饰标题）。只用于生成匹配字段，不影响展示用的原始 title。
  */
 function normalizeForMatch(s: string): string {
-  return (s || '')
+  return Array.from(s || '', ch => traditionalToSimplifiedMap[ch] ?? ch).join('')
     .toLowerCase()
     .replace(/[\s　《》【】「」『』〔〕〈〉（）()\[\]{}，,。.、·!！?？~～—\-_:：;；'"'"…]/g, '');
 }
@@ -803,6 +800,12 @@ export class IndexingManager {
    * @returns 最多10个匹配结果
    */
   searchPlaylist(query: string): IndexedPlaylist[] {
+    // 空查询视为「列出全部歌单」：无歌单名口令（"放音乐"/"放歌单"）用它挑默认歌单。
+    // 不能交给 fuzzySearchList——它对空 query 直接返回 []，导致冷启动、无活跃歌单时
+    // 口令必报「No playlists available」（songloft-org/songloft-plugin-miot#113）。
+    if (!query || !query.trim()) {
+      return this.playlists.slice(0, MAX_SEARCH_RESULTS);
+    }
     return fuzzySearchList(
       query,
       this.playlists,
@@ -977,6 +980,7 @@ export class IndexingManager {
       candidates,
       c => c.title,
       1,
+      normalizeForMatch,
     );
 
     if (matched.length > 0) {
@@ -1166,6 +1170,32 @@ export class IndexingManager {
     }
 
     return results;
+  }
+
+  /** 自动续播按完整歌手名匹配整个歌曲索引，不依赖歌曲是否已加入歌单。 */
+  async loadLibrarySongsByArtist(artistName: string, isCurrent: () => boolean = () => true): Promise<any[]> {
+    const artistKey = normalizeForMatch(artistName);
+    if (!artistKey || !isCurrent()) return [];
+    const ids = [...new Set(this.songs.filter((song) => song.artistLower === artistKey).map((song) => song.id))];
+    const songs: any[] = new Array(ids.length);
+    let next = 0;
+    // 限制桥接并发；个别歌曲被删除或读取失败不阻断其余队列。
+    await Promise.all(
+      Array.from({ length: Math.min(4, ids.length) }, async () => {
+        while (next < ids.length && isCurrent()) {
+          const index = next++;
+          try {
+            const song = await songloft.songs.getById(ids[index]);
+            if (isCurrent() && song?.url && song.type !== 'radio' && normalizeForMatch(song.artist) === artistKey) {
+              songs[index] = song;
+            }
+          } catch (e) {
+            songloft.log.warn(`[IndexingManager] Failed to load artist song id=${ids[index]}: ${String(e)}`);
+          }
+        }
+      }),
+    );
+    return isCurrent() ? songs.filter(Boolean) : [];
   }
 
   /** 内存索引里的最佳匹配（含 MIN_MATCH_SCORE 阈值），未达标返回 null。 */

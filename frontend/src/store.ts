@@ -1,3 +1,4 @@
+import type { ChatStatus } from '../../src/chat/types';
 import { computed, reactive } from 'vue';
 import { del, get, messageOf, pluginWebSocketUrl, post, query } from './api';
 import type {
@@ -12,6 +13,7 @@ import type {
   MiotConfig,
   PlayerStatus,
   Playlist,
+  PlaylistProgress,
   PlayMode,
   ScheduleLog,
   ScheduledTask,
@@ -26,8 +28,8 @@ const defaultConfig: MiotConfig = {
   server_host_status: 'empty',
   suggested_addresses: [],
   conversation_monitor_enabled: false,
-  conversation_poll_interval: 1,
-  conversation_poll_debug: false,
+  conversation_poll_interval: 2,
+  debug_log_enabled: false,
   voice_command_enabled: false,
   voice_memory_enabled: true,
   voice_memory_max_records: 100,
@@ -46,7 +48,8 @@ const defaultConfig: MiotConfig = {
   external_search_timeout: 6,
   external_search_no_import: false,
   search_priority: 'parallel',
-  extra_music_api_models: [],
+  music_api_model_disabled: [],
+  music_api_model_defaults: [],
   indicator_light_enabled: false,
   interrupt_tts_hint_enabled: false,
   interrupt_tts_hint_text: '正在搜索，请稍候',
@@ -56,6 +59,7 @@ const defaultConfig: MiotConfig = {
   play_announcement_delay: 3,
   play_announcement_scope: 'voice',
   smart_resume_timeout: 30,
+  hourly_chime_resume_enabled: false,
   default_cover_id: '',
   touchscreen_lyrics_enabled: false,
   ai_config: {},
@@ -67,16 +71,30 @@ export interface SnackbarState {
   token: number;
 }
 
+export interface OperationLogEntry {
+  id: number;
+  time: string;
+  message: string;
+  success: boolean;
+  ttsText?: string;
+}
+
 export interface ConfirmState {
   open: boolean;
   title: string;
   message: string;
   confirmText: string;
   dangerous: boolean;
-  resolve?: (value: boolean) => void;
+  /**
+   * 可选复选框：出现在确认对话框正文下方，勾选状态随 resolve 一起回传。
+   * 用于"删歌"这种"是/否" + "要不要顺带做另一件事"的确认场景。
+   */
+  checkbox?: { label: string; checked: boolean };
+  resolve?: (value: { confirmed: boolean; checked: boolean }) => void;
 }
 
 export const state = reactive({
+  chatStatus: null as ChatStatus | null,
   initialized: false,
   loading: true,
   startupError: '',
@@ -96,6 +114,9 @@ export const state = reactive({
   songsLoading: false,
   songsError: '',
   songSearch: '',
+  // 当前设备在当前所选歌单上次播到哪一首。切歌单/切设备都要重取：进度是按
+  // 「设备 × 歌单」记的，换任一维度都是另一条记录。
+  playlistProgress: null as PlaylistProgress | null,
   player: {} as PlayerStatus,
   playerBusy: false,
   statusConnected: false,
@@ -111,6 +132,9 @@ export const state = reactive({
   memoryUnclassified: [] as Array<Record<string, unknown>>,
   memoryAmbiguous: [] as Array<Record<string, unknown>>,
   searchProviders: [] as SearchProvider[],
+  aiModels: [] as Array<{ id: string; ownedBy?: string }>,
+  aiModelLoading: false,
+  aiModelError: '' as string,
   snackbar: null as SnackbarState | null,
   confirm: {
     open: false,
@@ -119,7 +143,7 @@ export const state = reactive({
     confirmText: '确定',
     dangerous: false,
   } as ConfirmState,
-  operationLog: [] as Array<{ time: string; message: string; success: boolean }>,
+  operationLog: [] as OperationLogEntry[],
 });
 
 export function deviceId(device: Device): string {
@@ -179,8 +203,19 @@ export function notify(
   }, duration);
 }
 
-export function addOperation(message: string, success: boolean): void {
-  state.operationLog.unshift({ time: new Date().toLocaleTimeString(), message, success });
+let operationId = 0;
+export function addOperation(message: string, success: boolean, text?: string): void {
+  const ttsText = text?.trim() || undefined;
+  const existingIndex =
+    ttsText === undefined ? -1 : state.operationLog.findIndex((item) => item.ttsText === ttsText);
+  const existing = existingIndex >= 0 ? state.operationLog.splice(existingIndex, 1)[0] : undefined;
+  state.operationLog.unshift({
+    id: existing?.id ?? ++operationId,
+    time: new Date().toLocaleTimeString(),
+    message,
+    success,
+    ttsText,
+  });
   state.operationLog.splice(30);
 }
 
@@ -189,28 +224,68 @@ export function confirmAction(
   message: string,
   confirmText = '确定',
   dangerous = false,
-): Promise<boolean> {
+  checkbox?: { label: string; initial?: boolean },
+): Promise<{ confirmed: boolean; checked: boolean }> {
   return new Promise((resolve) => {
-    state.confirm = { open: true, title, message, confirmText, dangerous, resolve };
+    state.confirm = {
+      open: true,
+      title,
+      message,
+      confirmText,
+      dangerous,
+      checkbox: checkbox ? { label: checkbox.label, checked: !!checkbox.initial } : undefined,
+      resolve,
+    };
   });
 }
 
 export function resolveConfirm(value: boolean): void {
-  state.confirm.resolve?.(value);
+  const checked = !!state.confirm.checkbox?.checked;
+  state.confirm.resolve?.({ confirmed: value, checked });
   state.confirm.open = false;
   state.confirm.resolve = undefined;
+  state.confirm.checkbox = undefined;
+}
+
+/**
+ * 从歌单删除一首歌。可选 `fromLibrary=true` 时同时从曲库永久删除
+ * （封面 + 缓存都清）。
+ *
+ * 音箱正播那首被删时，后端会先切下一首再摘除；前端只负责刷新本地歌曲列表和
+ * 播放状态（不重新拉整份进度：切换靠 status WS 推）。收藏歌单删除后，
+ * fullscreen 的"已收藏"图标由下一次 `loadSongDetails` 校准。
+ */
+export async function removeSongFromPlaylist(song: Song, opts: { fromLibrary?: boolean } = {}): Promise<void> {
+  if (!state.selectedPlaylistId) throw new Error('请先选择歌单');
+  try {
+    await post('/player/song/remove', {
+      playlist_id: Number(state.selectedPlaylistId),
+      song_id: song.id,
+      from_library: !!opts.fromLibrary,
+      account_id: state.currentAccountId,
+      device_id: state.currentDeviceId,
+    });
+    state.songs = state.songs.filter((item) => item.id !== song.id);
+    notify(opts.fromLibrary ? '已从歌单和曲库删除' : '已从歌单删除', 'success');
+    void refreshPlayerStatus();
+    void refreshPlaylistProgress();
+  } catch (error) {
+    notify(messageOf(error), 'error');
+    throw error;
+  }
 }
 
 export async function loadConfig(): Promise<void> {
   const config = await get<MiotConfig>('/config');
-  // Normalize nullable fields before touching the reactive object. WebF can render
-  // between individual assignments, so never expose transient null arrays.
+  // Normalize nullable fields before touching the reactive object: never expose
+  // transient null arrays (reactivity can render between individual assignments).
   const normalized: MiotConfig = {
     ...defaultConfig,
     ...(config || {}),
     suggested_addresses: Array.isArray(config?.suggested_addresses) ? config.suggested_addresses : [],
     external_search_sources: Array.isArray(config?.external_search_sources) ? config.external_search_sources : [],
-    extra_music_api_models: Array.isArray(config?.extra_music_api_models) ? config.extra_music_api_models : [],
+    music_api_model_disabled: Array.isArray(config?.music_api_model_disabled) ? config.music_api_model_disabled : [],
+    music_api_model_defaults: Array.isArray(config?.music_api_model_defaults) ? config.music_api_model_defaults : [],
     ai_config: config?.ai_config && typeof config.ai_config === 'object' ? { ...config.ai_config } : {},
   };
   Object.assign(state.config, normalized);
@@ -292,6 +367,9 @@ export async function selectDevice(accountId: string, selectedDeviceId: string):
   state.currentAccountId = accountId;
   state.currentDeviceId = selectedDeviceId;
   state.player = {};
+  // 进度是按设备记的：换了设备，当前歌单的续播位置也换了一条记录
+  state.playlistProgress = null;
+  void refreshPlaylistProgress();
   connectStatusStream();
   try {
     await post('/mina/last_selection', { account_id: accountId, device_id: selectedDeviceId });
@@ -330,10 +408,14 @@ export async function selectPlaylist(playlistId: string): Promise<void> {
   state.songSearch = '';
   state.songs = [];
   state.songsError = '';
+  state.playlistProgress = null;
   if (!playlistId) return;
   songRequest += 1;
   const request = songRequest;
   state.songsLoading = true;
+  // 不等它：进度只是辅助信息（标记上次播放的那首、亮起「继续播放」），
+  // 不该把歌曲列表的加载卡在它后面
+  void refreshPlaylistProgress();
   try {
     const songs = await get<Song[]>(`/playlists/${encodeURIComponent(playlistId)}/songs`);
     if (request === songRequest) state.songs = songs || [];
@@ -343,6 +425,39 @@ export async function selectPlaylist(playlistId: string): Promise<void> {
     if (request === songRequest) state.songsLoading = false;
   }
 }
+
+let progressRequest = 0;
+/**
+ * 拉取当前设备在当前所选歌单的续播进度。进度按「设备 × 歌单」记，
+ * 所以切歌单、切设备都要重取；取不到就当没有，不打扰用户。
+ */
+export async function refreshPlaylistProgress(): Promise<void> {
+  progressRequest += 1;
+  const request = progressRequest;
+  const playlistId = state.selectedPlaylistId;
+  if (!playlistId || !state.currentAccountId || !state.currentDeviceId) {
+    state.playlistProgress = null;
+    return;
+  }
+  try {
+    const progress = await get<PlaylistProgress | null>(
+      `/playlists/${encodeURIComponent(playlistId)}/progress${query({
+        account_id: state.currentAccountId,
+        device_id: state.currentDeviceId,
+      })}`,
+    );
+    if (request === progressRequest) state.playlistProgress = progress || null;
+  } catch {
+    if (request === progressRequest) state.playlistProgress = null;
+  }
+}
+
+/** 当前所选歌单里「上次播到的那首」，用于列表标记与「继续播放」按钮文案 */
+export const lastPlayedSong = computed(() => {
+  const songId = state.playlistProgress?.song_id;
+  if (!songId) return null;
+  return state.songs.find((song) => song.id === songId) || null;
+});
 
 async function selectCurrentPlaylistOnEntry(): Promise<void> {
   if (state.selectedPlaylistId) return;
@@ -376,28 +491,85 @@ function targetBody() {
   return { account_id: state.currentAccountId, device_id: state.currentDeviceId };
 }
 
+/**
+ * 播放指令去重窗口（songloft-org/songloft#449）。
+ * playerCommand 的 playerBusy 只覆盖请求在途期间：它在 refreshPlayerStatus 走完就释放，
+ * 紧随其后的同一个播放意图（一次点击触发两个事件，或用户手抖点了两下）照样发得出去，
+ * 结果是同一首歌在一两秒内向音箱连推两次 play-music。这种重复下发没有意义，丢掉后一次。
+ */
+const PLAY_DEDUP_WINDOW_MS = 1500;
+let lastPlayIntentKey = '';
+let lastPlayIntentAt = 0;
+
+async function runPlayIntent(key: string, run: () => Promise<void>): Promise<void> {
+  const now = Date.now();
+  if (key === lastPlayIntentKey && now - lastPlayIntentAt < PLAY_DEDUP_WINDOW_MS) return;
+  lastPlayIntentKey = key;
+  lastPlayIntentAt = now;
+  try {
+    await run();
+  } catch (error) {
+    // 下发失败不该连用户紧接着的重试一起吞掉
+    lastPlayIntentKey = '';
+    throw error;
+  }
+}
+
 export async function playSong(song: Song, visibleIndex?: number): Promise<void> {
   if (!state.selectedPlaylistId) throw new Error('请先选择歌单');
   const fallbackIndex = state.songs.findIndex((item) => item.id === song.id);
-  await playerCommand('/player/play', {
-    ...targetBody(),
-    playlist_id: Number(state.selectedPlaylistId),
-    song_id: song.id,
-    start_index: fallbackIndex >= 0 ? fallbackIndex : visibleIndex || 0,
-    play_mode: state.player.play_mode || 'order',
+  await runPlayIntent(`song:${state.selectedPlaylistId}:${song.id}`, async () => {
+    await playerCommand('/player/play', {
+      ...targetBody(),
+      playlist_id: Number(state.selectedPlaylistId),
+      song_id: song.id,
+      start_index: fallbackIndex >= 0 ? fallbackIndex : visibleIndex || 0,
+      play_mode: state.player.play_mode || 'order',
+    });
+    void refreshPlaylistProgress();
   });
 }
 
-export async function playerCommand(path: string, body: Record<string, unknown> = {}): Promise<void> {
-  if (state.playerBusy) return;
+/**
+ * 从本歌单上次播到的那首继续播放。
+ * 起点由后端按「设备 × 歌单」的进度表算（按歌曲 ID 定位，歌单顺序变了也不会串歌），
+ * 前端不传 song_id / start_index，避免两边各算一次口径不一致。
+ */
+export async function resumePlaylist(): Promise<void> {
+  if (!state.selectedPlaylistId) throw new Error('请先选择歌单');
+  await runPlayIntent(`resume:${state.selectedPlaylistId}`, async () => {
+    await playerCommand('/player/play', {
+      ...targetBody(),
+      playlist_id: Number(state.selectedPlaylistId),
+      start_position: 'resume',
+      play_mode: state.player.play_mode || 'order',
+    });
+    void refreshPlaylistProgress();
+  });
+}
+
+export async function playerCommand(
+  path: string,
+  body: Record<string, unknown> = {},
+): Promise<boolean> {
+  if (state.playerBusy) return false;
+  const ttsText =
+    path === '/mina/tts' && typeof body.text === 'string' ? body.text.trim() : undefined;
   state.playerBusy = true;
   try {
     await post(path, { ...targetBody(), ...body });
-    requestStatusRefresh();
+    if (ttsText) addOperation('文字播报已发送', true, ttsText);
+    try {
+      requestStatusRefresh();
+    } catch (error) {
+      // 指令已被接受，状态连接异常时继续通过 HTTP 刷新。
+      console.warn('[miot] status refresh request failed', messageOf(error));
+    }
     await refreshPlayerStatus();
+    return true;
   } catch (error) {
     const message = messageOf(error);
-    addOperation(message, false);
+    addOperation(message, false, ttsText);
     notify(message, 'error');
     throw error;
   } finally {
@@ -437,6 +609,7 @@ export async function refreshPlayerStatus(): Promise<void> {
   if (!state.currentAccountId || !state.currentDeviceId) return;
   if (statusRequestBusy) return;
   statusRequestBusy = true;
+  const generation = statusRequestGeneration;
   try {
     const status = await get<PlayerStatus>(
       `/player/status${query({
@@ -444,11 +617,13 @@ export async function refreshPlayerStatus(): Promise<void> {
         device_id: state.currentDeviceId,
       })}`,
     );
-    applyPlayerStatus(status);
+    if (generation === statusRequestGeneration) applyPlayerStatus(status);
   } catch (error) {
-    if (!state.statusConnected) console.warn('[miot] status refresh failed', messageOf(error));
+    if (generation === statusRequestGeneration && !state.statusConnected) {
+      console.warn('[miot] status refresh failed', messageOf(error));
+    }
   } finally {
-    statusRequestBusy = false;
+    if (generation === statusRequestGeneration) statusRequestBusy = false;
   }
 }
 
@@ -465,9 +640,42 @@ function applyPlayerStatus(incoming: PlayerStatus): void {
 let statusSocket: WebSocket | null = null;
 let statusReconnect: ReturnType<typeof setTimeout> | null = null;
 let statusPoll: ReturnType<typeof setInterval> | null = null;
+let statusOpenTimer: ReturnType<typeof setTimeout> | null = null;
 let statusAttempts = 0;
 let statusManualClose = false;
 let statusRequestBusy = false;
+// 恢复、切设备或卸载后，旧 HTTP 请求的结果和 finally 都不能影响新一轮请求。
+let statusRequestGeneration = 0;
+// 每次开连自增。一次断线可能同时打到 onerror 和 onclose，用它保证回收只做一遍，
+// 免得重连退避的 statusAttempts 被多加一次。
+let statusSocketGen = 0;
+
+// close 必须带关闭码：本地 close 不带码时，部分实现会把 closeCode 留成 null 并在
+// 派发 close 事件时抛空指针，导致 onclose 永不触发、状态流静默停更
+// （songloft-org/songloft-plugin-miot#96）。带上码之后各条赋值路径都非空了。
+const STATUS_CLOSE_CODE = 1000;
+const STATUS_CLOSE_REASON = 'client';
+// 开连后这么久还没 onopen 就先把轮询顶上，别让「连不上」等于「没状态」。
+// 真连上时 onopen 会把轮询清掉。
+const STATUS_OPEN_TIMEOUT_MS = 8000;
+
+function resetStatusRequests(): void {
+  statusRequestGeneration += 1;
+  statusRequestBusy = false;
+}
+
+function resumeStatusStream(): void {
+  if (document.hidden || statusManualClose || !state.currentAccountId || !state.currentDeviceId) return;
+  // 后台断网可能留下 readyState=OPEN 的旧连接，且不触发 error/close。
+  // 恢复可见或网络恢复时主动换连接，HTTP 快照不必等待握手完成（songloft-org/songloft#493）。
+  if (statusReconnect) clearTimeout(statusReconnect);
+  statusReconnect = null;
+  statusAttempts = 0;
+  resetStatusRequests();
+  abandonStatusSocket(statusSocketGen, false);
+  openStatusSocket();
+  void refreshPlayerStatus();
+}
 
 function startStatusPolling() {
   if (statusPoll) return;
@@ -485,11 +693,41 @@ function scheduleStatusReconnect() {
   }, delay);
 }
 
+function clearStatusOpenTimer() {
+  if (statusOpenTimer) clearTimeout(statusOpenTimer);
+  statusOpenTimer = null;
+}
+
+/** 回收当前 socket。`recover` 为真时按退避重连，并先让轮询顶上。 */
+function abandonStatusSocket(gen: number, recover: boolean) {
+  if (gen !== statusSocketGen) return;
+  statusSocketGen += 1;
+  clearStatusOpenTimer();
+  const socket = statusSocket;
+  statusSocket = null;
+  state.statusConnected = false;
+  // 读实例上的常量，不读 `WebSocket.CLOSED`：部分宿主环境的 WebSocket 实现只在
+  // 构造函数里把 readyState 常量挂到实例上、类上没有静态同名成员。
+  if (socket && socket.readyState !== socket.CLOSED) {
+    try {
+      socket.close(STATUS_CLOSE_CODE, STATUS_CLOSE_REASON);
+    } catch {
+      // 已经关掉、或根本没连上，都不影响下面的回落。
+    }
+  }
+  if (recover && !statusManualClose) {
+    startStatusPolling();
+    scheduleStatusReconnect();
+  }
+}
+
 function openStatusSocket() {
   if (!state.currentAccountId || !state.currentDeviceId || typeof WebSocket === 'undefined') {
     startStatusPolling();
     return;
   }
+  if (statusSocket) abandonStatusSocket(statusSocketGen, false);
+  const gen = statusSocketGen;
   try {
     statusSocket = new WebSocket(
       pluginWebSocketUrl(
@@ -500,12 +738,15 @@ function openStatusSocket() {
       ),
     );
     statusSocket.onopen = () => {
+      if (gen !== statusSocketGen) return;
+      clearStatusOpenTimer();
       state.statusConnected = true;
       statusAttempts = 0;
       if (statusPoll) clearInterval(statusPoll);
       statusPoll = null;
     };
     statusSocket.onmessage = (event) => {
+      if (gen !== statusSocketGen) return;
       try {
         const frame = JSON.parse(String(event.data));
         if (frame?.type === 'status' && frame.data) applyPlayerStatus(frame.data);
@@ -513,18 +754,19 @@ function openStatusSocket() {
         // Ignore malformed frames; the next valid status replaces them.
       }
     };
-    statusSocket.onerror = () => statusSocket?.close();
-    statusSocket.onclose = () => {
-      statusSocket = null;
-      state.statusConnected = false;
-      if (!statusManualClose) {
-        startStatusPolling();
-        scheduleStatusReconnect();
-      }
-    };
+    // 恢复动作必须在 onerror 里自己做完，不能 `close()` 一下等 onclose 收尾：
+    // 部分实现的连接失败只发 error、不发 close，close() 也可能落在「未连接」分支
+    // 不产生任何事件 —— 于是 onclose 永不触发，既不重连也不回落轮询。
+    statusSocket.onerror = () => abandonStatusSocket(gen, true);
+    statusSocket.onclose = () => abandonStatusSocket(gen, true);
+    clearStatusOpenTimer();
+    statusOpenTimer = setTimeout(() => {
+      statusOpenTimer = null;
+      if (gen !== statusSocketGen || state.statusConnected) return;
+      startStatusPolling();
+    }, STATUS_OPEN_TIMEOUT_MS);
   } catch {
-    startStatusPolling();
-    scheduleStatusReconnect();
+    abandonStatusSocket(gen, true);
   }
 }
 
@@ -532,24 +774,28 @@ export function connectStatusStream(): void {
   disconnectStatusStream();
   statusManualClose = false;
   statusAttempts = 0;
+  document.addEventListener('visibilitychange', resumeStatusStream);
+  window.addEventListener('online', resumeStatusStream);
   openStatusSocket();
 }
 
 export function requestStatusRefresh(): void {
-  if (statusSocket?.readyState === WebSocket.OPEN) {
+  // 同上：读实例上的常量比对 readyState，类上的静态成员在部分宿主环境是 undefined。
+  if (statusSocket && statusSocket.readyState === statusSocket.OPEN) {
     statusSocket.send(JSON.stringify({ type: 'refresh' }));
   }
 }
 
 export function disconnectStatusStream(): void {
   statusManualClose = true;
+  document.removeEventListener('visibilitychange', resumeStatusStream);
+  window.removeEventListener('online', resumeStatusStream);
+  resetStatusRequests();
   if (statusReconnect) clearTimeout(statusReconnect);
   if (statusPoll) clearInterval(statusPoll);
   statusReconnect = null;
   statusPoll = null;
-  statusSocket?.close();
-  statusSocket = null;
-  state.statusConnected = false;
+  abandonStatusSocket(statusSocketGen, false);
 }
 
 export async function loadGroups(): Promise<void> {
@@ -665,6 +911,24 @@ export async function loadSearchProviders(): Promise<void> {
   state.searchProviders = Array.isArray(result) ? result : result.providers || [];
 }
 
+/** 从 AI provider 拉取模型列表（同时预检 API 连通性） */
+export async function loadAiModels(): Promise<void> {
+  state.aiModelLoading = true;
+  state.aiModelError = '';
+  try {
+    const resp = await get<{ models: Array<{ id: string; ownedBy?: string }>; modelCount: number }>(
+      '/voice-commands/models',
+    );
+    state.aiModels = resp?.models || [];
+  } catch (error) {
+    state.aiModels = [];
+    state.aiModelError = messageOf(error);
+    throw error;
+  } finally {
+    state.aiModelLoading = false;
+  }
+}
+
 export async function refreshAll(): Promise<void> {
   if (state.refreshing) return;
   state.refreshing = true;
@@ -714,7 +978,7 @@ async function connectDevicesInBackground(): Promise<void> {
 export function disposeStore(): void {
   disconnectStatusStream();
   if (snackbarTimer) clearTimeout(snackbarTimer);
-  state.confirm.resolve?.(false);
+  state.confirm.resolve?.({ confirmed: false, checked: false });
 }
 
 export { messageOf };

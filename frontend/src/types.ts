@@ -11,6 +11,7 @@ export interface AIConfig {
   enabled?: boolean;
   api_url?: string;
   api_key?: string;
+  custom_headers?: Record<string, string>;
   model?: string;
   timeout?: number;
   prompt?: string;
@@ -22,7 +23,7 @@ export interface MiotConfig {
   suggested_addresses: string[];
   conversation_monitor_enabled: boolean;
   conversation_poll_interval: number;
-  conversation_poll_debug: boolean;
+  debug_log_enabled: boolean;
   voice_command_enabled: boolean;
   voice_memory_enabled: boolean;
   voice_memory_max_records: number;
@@ -41,7 +42,8 @@ export interface MiotConfig {
   external_search_timeout: number;
   external_search_no_import: boolean;
   search_priority: 'parallel' | 'local_first' | 'external_first';
-  extra_music_api_models: string[];
+  music_api_model_disabled: string[];
+  music_api_model_defaults: string[];
   indicator_light_enabled: boolean;
   interrupt_tts_hint_enabled: boolean;
   interrupt_tts_hint_text: string;
@@ -51,6 +53,7 @@ export interface MiotConfig {
   play_announcement_delay: number;
   play_announcement_scope: string;
   smart_resume_timeout: number;
+  hourly_chime_resume_enabled: boolean;
   default_cover_id: string | number;
   touchscreen_lyrics_enabled: boolean;
   ai_config: AIConfig;
@@ -140,6 +143,15 @@ export interface Song {
   cover_url?: string;
   lyric_url?: string;
   is_live?: boolean;
+}
+
+/** 某台设备在某个歌单上次播到哪一首（后端 GET /playlists/:id/progress） */
+export interface PlaylistProgress {
+  playlist_id: number;
+  song_id: number;
+  song_index: number;
+  position_sec: number;
+  updated_at: number;
 }
 
 export type PlayMode = 'order' | 'single' | 'random' | 'loop' | 'singlePlay';
@@ -246,12 +258,12 @@ export interface ScheduledTask {
 }
 
 export interface ScheduleLog {
-  id?: string;
-  task_id?: string;
-  task_name?: string;
-  success?: boolean;
-  message?: string;
-  timestamp?: number | string;
+  task_id: string;
+  task_name: string;
+  action: string;
+  executed_at: string;
+  success: boolean;
+  message: string;
 }
 
 export interface LoginChallenge {

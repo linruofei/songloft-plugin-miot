@@ -5,7 +5,7 @@
 import { CookieJar } from '../utils/cookie';
 import { fetchWithRedirects } from '../utils/http';
 import { generateDeviceId } from '../utils/crypto';
-import { isPollDebug } from '../utils/debug';
+import { isDebugLog } from '../utils/debug';
 import {
   MINA_API_BASE_URL,
   MINA_SID,
@@ -32,6 +32,43 @@ const PAUSE_VERIFY_ATTEMPTS = 2;
 /** 每次回读前的等待时间（ms），给设备状态上报留缓冲 */
 const PAUSE_VERIFY_DELAY_MS = 700;
 
+const UBUS_TIMEOUT_MS = 5000;
+const STATUS_INTERVAL_MS = 5000;
+const STATUS_MIN_INTERVAL_MS = 3000;
+const STATUS_TAIL_INTERVAL_MS = 1000;
+const STATUS_TAIL_FAST_QUERIES = 4;
+const STATUS_FAILURE_DELAYS_MS = [5000, 60000, 300000, 600000];
+
+export interface StatusQueryOptions {
+  /** 控制操作后的有限次数回读，绕过后台节流；仍不能复用操作前的采样。 */
+  verify?: boolean;
+  /** 整点窗口可将成功采样缓存缩到三秒；不绕过失败退避或控制操作后的等待。 */
+  maxAgeMs?: number;
+  /** 已确认当前流接近结尾时，最多四次将成功缓存缩到一秒；不绕过失败退避。 */
+  tail?: boolean;
+}
+
+interface StatusQuery {
+  revision: number;
+  failures: number;
+  nextAt: number;
+  tailFastQueries: number;
+  sample?: { revision: number; result: UbusResponse; at: number };
+  inflight?: { revision: number; promise: Promise<UbusResponse | null> };
+}
+
+interface UbusTask {
+  status: boolean;
+  run: () => Promise<UbusResponse | null>;
+  resolve: (value: UbusResponse | null) => void;
+  reject: (reason: unknown) => void;
+}
+
+interface UbusQueue {
+  running: boolean;
+  tasks: UbusTask[];
+}
+
 export interface PlayMetadata {
   title: string;
   artist?: string;
@@ -45,7 +82,8 @@ export class MinaHTTPClient {
   private tokenInfo: XiaomiTokenInfo;
   private userAgent: string;
   private onTokenExpired?: () => Promise<boolean>;
-  private ubusQueues: Map<string, Promise<void>> = new Map();
+  private ubusQueues = new Map<string, UbusQueue>();
+  private statusQueries = new Map<string, StatusQuery>();
 
   constructor(tokenInfo: XiaomiTokenInfo, onTokenExpired?: () => Promise<boolean>) {
     this.tokenInfo = tokenInfo;
@@ -133,13 +171,17 @@ export class MinaHTTPClient {
    * @param deviceId - 设备 ID
    * @param url - 音频 URL
    * @param hardware - 设备硬件型号（用于选择播放方法）
-   * @param extraModels - 用户自定义的额外 Music API 型号列表
+   * @param disabledModels - 用户显式禁用 Music API 的型号列表（优先于默认白名单）
    * @param lyricsMode - 触屏歌词模式：仅在 Music API 播放路径上启用，
    *   逐首搜云端曲库匹配真实 audioID（搜不到回退 customAudioId），使触屏音箱显示歌词。
    *   参考 xiaomusic：player_play_music 有兼容性风险，非兼容型号仍走 player_play_url。
    */
-  async playByUrl(deviceId: string, url: string, hardware = '', extraModels?: string[], keepLight = false, customAudioId?: string, lyricsMode?: { enabled: boolean; songName?: string; metadata?: PlayMetadata }): Promise<boolean> {
-    const useMusicAPI = hardware ? needUsePlayMusicAPI(hardware, extraModels) : false;
+  async playByUrl(deviceId: string, url: string, hardware = '', disabledModels?: string[], keepLight = false, customAudioId?: string, lyricsMode?: { enabled: boolean; songName?: string; metadata?: PlayMetadata }, current?: () => boolean): Promise<boolean> {
+    const useMusicAPI = hardware ? needUsePlayMusicAPI(hardware, disabledModels) : false;
+    if (isDebugLog()) {
+      const disabled = Array.isArray(disabledModels) ? disabledModels.join(',') : '';
+      songloft.log.info(`[MinaClient] playByUrl device=${deviceId} hardware=${hardware} useMusicAPI=${useMusicAPI} keepLight=${keepLight} lyricsMode=${!!lyricsMode?.enabled} disabledModels=[${disabled}] url=${this.redactAccessToken(url).slice(0, 160)}`);
+    }
     if (useMusicAPI) {
       const fallbackAudioId = customAudioId || DEFAULT_MUSIC_AUDIO_ID;
       if (lyricsMode?.enabled) {
@@ -147,32 +189,32 @@ export class MinaHTTPClient {
         const displayName = this.formatPlayMetadataForLog(lyricsMode.metadata || lyricsMode.songName || '');
         songloft.log.info(`[MinaClient] touchscreen lyrics selected audioID=${audioId} fallbackAudioID=${fallbackAudioId} song=${displayName}`);
         // xiaomusic 的 continue_play 通过 _type=1 设置 audio_type=MUSIC；这是触屏歌词/封面的前提。
-        const ok = await this.playByMusicURL(deviceId, url, true, audioId, 'play-music:lyrics');
+        const ok = await this.playByMusicURL(deviceId, url, true, audioId, 'play-music:lyrics', current);
         if (ok) {
           return true;
         }
 
         if (audioId !== fallbackAudioId) {
           songloft.log.warn(`[MinaClient] searched audioID failed, retrying default audioID=${fallbackAudioId} in touchscreen lyrics mode`);
-          const defaultLyricsOK = await this.playByMusicURL(deviceId, url, true, fallbackAudioId, 'play-music:lyrics-default');
+          const defaultLyricsOK = await this.playByMusicURL(deviceId, url, true, fallbackAudioId, 'play-music:lyrics-default', current);
           if (defaultLyricsOK) {
             return true;
           }
         }
 
         songloft.log.warn('[MinaClient] playByMusicURL failed in touchscreen lyrics mode, retrying normal Music API playback');
-        const normalMusicOK = await this.playByMusicURL(deviceId, url, keepLight, fallbackAudioId, 'play-music:fallback');
+        const normalMusicOK = await this.playByMusicURL(deviceId, url, keepLight, fallbackAudioId, 'play-music:fallback', current);
         if (normalMusicOK) {
           return true;
         }
 
         songloft.log.warn('[MinaClient] normal Music API fallback failed, trying player_play_url');
-        return this.playURL(deviceId, url, keepLight);
+        return this.playURL(deviceId, url, keepLight, current);
       }
 
-      return this.playByMusicURL(deviceId, url, keepLight, fallbackAudioId, 'play-music');
+      return this.playByMusicURL(deviceId, url, keepLight, fallbackAudioId, 'play-music', current);
     }
-    return this.playURL(deviceId, url, keepLight);
+    return this.playURL(deviceId, url, keepLight, current);
   }
 
   /**
@@ -280,18 +322,24 @@ export class MinaHTTPClient {
   /**
    * 使用 player_play_url 播放 URL
    */
-  async playURL(deviceId: string, url: string, keepLight = false): Promise<boolean> {
+  async playURL(deviceId: string, url: string, keepLight = false, current?: () => boolean): Promise<boolean> {
+    if (isDebugLog()) {
+      songloft.log.info(`[MinaClient] play-url stream device=${deviceId} keepLight=${keepLight} url=${this.redactAccessToken(url).slice(0, 160)}`);
+    }
     const message = { url, type: keepLight ? 1 : 2, media: 'app_ios' };
-    const result = await this.ubusRequest(deviceId, 'player_play_url', 'mediaplayer', message, 'play-url');
+    const result = await this.ubusRequest(deviceId, 'player_play_url', 'mediaplayer', message, 'play-url', current);
     return this.isDeviceResultOK(result, 'player_play_url');
   }
 
   /**
    * 使用 player_play_music 播放 URL（用于部分设备型号）
    */
-  async playByMusicURL(deviceId: string, audioUrl: string, keepLight = false, customAudioId?: string, logLabel = 'play-music'): Promise<boolean> {
+  async playByMusicURL(deviceId: string, audioUrl: string, keepLight = false, customAudioId?: string, logLabel = 'play-music', current?: () => boolean): Promise<boolean> {
     // 默认封面
     const audioId = customAudioId || DEFAULT_MUSIC_AUDIO_ID;
+    if (isDebugLog()) {
+      songloft.log.info(`[MinaClient] ${logLabel} stream device=${deviceId} keepLight=${keepLight} audioId=${audioId} url=${this.redactAccessToken(audioUrl).slice(0, 160)}`);
+    }
 
     const music = {
       payload: {
@@ -323,8 +371,32 @@ export class MinaHTTPClient {
       music: JSON.stringify(music),
     };
 
-    const result = await this.ubusRequest(deviceId, 'player_play_music', 'mediaplayer', message, logLabel);
-    return this.isDeviceResultOK(result, 'player_play_music');
+    const result = await this.ubusRequest(deviceId, 'player_play_music', 'mediaplayer', message, logLabel, current);
+    const ok = this.isDeviceResultOK(result, 'player_play_music');
+    // 诊断 songloft-org/songloft#453：ubus 云端汇报 success，但音箱仍无声。
+    // 推送 2s 后异步回读一次真实播放状态，暴露「云端受理但设备未拉流」的静默失败。
+    // fire-and-forget：不阻塞返回、异常吞掉，仅打日志。
+    if (ok && isDebugLog()) {
+      setTimeout(() => {
+        this.getPlayerStatus(deviceId).then(status => {
+          const data = (status?.data ?? {}) as Record<string, unknown>;
+          const info = typeof data.info === 'string' ? data.info : '';
+          songloft.log.info(`[MinaClient] ${logLabel} readback+2s device=${deviceId} code=${status?.code ?? 'null'} info=${info.substring(0, 200)}`);
+        }).catch(e => {
+          songloft.log.warn(`[MinaClient] ${logLabel} readback+2s failed device=${deviceId}: ${String(e)}`);
+        });
+      }, 2000);
+    }
+    return ok;
+  }
+
+  /**
+   * 日志脱敏：把 URL 里的 access_token 值遮成 <redacted>。
+   * 播放路径日志会打完整 URL 便于排障，但不能把 token 泄漏到日志文件。
+   */
+  private redactAccessToken(url: string): string {
+    if (!url) return url;
+    return url.replace(/([?&]access_token=)[^&\s]+/g, '$1<redacted>');
   }
 
   /**
@@ -332,24 +404,25 @@ export class MinaHTTPClient {
    * 统一带日志标签，并按设备级返回码判定成功：只看 ubus 外层 code 会把
    * 「云端受理了但音箱拒绝执行」也当成功，导致暂停等操作静默失效。
    */
-  private async playerOperation(deviceId: string, action: 'play' | 'pause' | 'stop'): Promise<boolean> {
+  private async playerOperation(deviceId: string, action: 'play' | 'pause' | 'stop', isCurrent?: () => boolean): Promise<boolean> {
     const message = { action, media: 'app_ios' };
-    const result = await this.ubusRequest(deviceId, 'player_play_operation', 'mediaplayer', message, 'play-op:' + action);
+    const result = await this.ubusRequest(deviceId, 'player_play_operation', 'mediaplayer', message, 'play-op:' + action, isCurrent);
+    if (isCurrent?.() === false) return false;
     return this.isDeviceResultOK(result, 'player_play_operation:' + action);
   }
 
   /**
    * 播放操作（play）
    */
-  async playerPlay(deviceId: string): Promise<boolean> {
-    return this.playerOperation(deviceId, 'play');
+  async playerPlay(deviceId: string, isCurrent?: () => boolean): Promise<boolean> {
+    return this.playerOperation(deviceId, 'play', isCurrent);
   }
 
   /**
    * 暂停播放
    */
-  async playerPause(deviceId: string): Promise<boolean> {
-    return this.playerOperation(deviceId, 'pause');
+  async playerPause(deviceId: string, isCurrent?: () => boolean): Promise<boolean> {
+    return this.playerOperation(deviceId, 'pause', isCurrent);
   }
 
   /**
@@ -362,13 +435,14 @@ export class MinaHTTPClient {
    * @returns 'paused' 暂停已生效 | 'stopped' 已升级为停止（设备端媒体上下文丢失，无法原位续播）
    *          | 'failed' pause 与 stop 均下发失败
    */
-  async playerPauseVerified(deviceId: string): Promise<'paused' | 'stopped' | 'failed'> {
-    const pauseOK = await this.playerPause(deviceId);
+  async playerPauseVerified(deviceId: string, isCurrent?: () => boolean): Promise<'paused' | 'stopped' | 'failed'> {
+    const pauseOK = await this.playerPause(deviceId, isCurrent);
 
     // 设备状态上报有延迟：连续两次回读都仍是 playing 才判定 pause 未生效，
     // 避免误伤 pause 正常、只是状态上报慢的型号（升级 stop 会丢失续播位置）。
     for (let i = 0; i < PAUSE_VERIFY_ATTEMPTS; i++) {
       await new Promise(r => setTimeout(r, PAUSE_VERIFY_DELAY_MS));
+      if (isCurrent?.() === false) return 'failed';
       const status = await this.readPlayStatus(deviceId);
       if (status !== PLAY_STATUS_PLAYING) {
         return 'paused';
@@ -376,7 +450,7 @@ export class MinaHTTPClient {
     }
 
     songloft.log.warn(`[MinaClient] pause ignored by device=${deviceId} (still playing), escalating to stop`);
-    if (await this.playerOperation(deviceId, 'stop')) {
+    if (await this.playerOperation(deviceId, 'stop', isCurrent)) {
       return 'stopped';
     }
     return pauseOK ? 'paused' : 'failed';
@@ -385,15 +459,27 @@ export class MinaHTTPClient {
   /**
    * 恢复播放
    */
-  async playerResume(deviceId: string): Promise<boolean> {
-    return this.playerPlay(deviceId);
+  async playerResume(deviceId: string, isCurrent?: () => boolean): Promise<boolean> {
+    return this.playerPlay(deviceId, isCurrent);
   }
 
   /**
    * 停止播放
    */
-  async playerStop(deviceId: string): Promise<boolean> {
-    return this.playerOperation(deviceId, 'stop');
+  async playerStop(deviceId: string, isCurrent?: () => boolean): Promise<boolean> {
+    // 部分小爱音箱型号单独调用 stop 不会真正停止播放，先暂停再停止
+    await this.playerPause(deviceId, isCurrent);
+    return this.playerOperation(deviceId, 'stop', isCurrent);
+  }
+
+  /** 中断回答专用：每条指令在设备队列内发送前检查是否已被新操作取代。 */
+  async playerStopGuarded(deviceId: string, isCurrent: () => boolean): Promise<'stopped' | 'failed' | 'cancelled'> {
+    if (!isCurrent()) return 'cancelled';
+    await this.playerOperation(deviceId, 'pause', isCurrent);
+    if (!isCurrent()) return 'cancelled';
+    const stopped = await this.playerOperation(deviceId, 'stop', isCurrent);
+    if (!isCurrent()) return 'cancelled';
+    return stopped ? 'stopped' : 'failed';
   }
 
   /**
@@ -401,7 +487,7 @@ export class MinaHTTPClient {
    * @returns 1=playing 2=paused 0=stopped，-1 表示未知（请求失败或响应无法解析）
    */
   async readPlayStatus(deviceId: string): Promise<number> {
-    const raw = await this.getPlayerStatus(deviceId);
+    const raw = await this.getPlayerStatus(deviceId, { verify: true });
     const info = (raw?.data as any)?.info;
     if (typeof info !== 'string') return -1;
     try {
@@ -427,7 +513,7 @@ export class MinaHTTPClient {
    * 获取音量
    */
   async getVolume(deviceId: string): Promise<number> {
-    const result = await this.getPlayerStatus(deviceId);
+    const result = await this.getPlayerStatus(deviceId, { verify: true });
     if (result && typeof result.data === 'object' && result.data !== null) {
       const data = result.data as Record<string, unknown>;
       const info = data['info'];
@@ -437,7 +523,7 @@ export class MinaHTTPClient {
           if (typeof parsed.volume === 'number') {
             return parsed.volume;
           }
-        } catch {}
+        } catch { }
       }
     }
     return -1;
@@ -449,9 +535,12 @@ export class MinaHTTPClient {
    * 文字转语音
    *
    * 优先走 mibrain/text_to_speech（多数固件真正的语音播报入口），
-   * 失败再回退到旧的 mediaplayer/player_play_tts（部分老设备）。
+   * 失败再回退到旧的 mediaplayer/player_play_tts（部分老设备），3012 超时除外。
+   * null 表示设备回执超时、可能已经播出；不能据此重发或认定播放失败。
    */
-  async textToSpeech(deviceId: string, text: string, options?: { hardware?: string; miotDID?: string }): Promise<boolean> {
+  async textToSpeech(deviceId: string, text: string, options?: { hardware?: string; miotDID?: string; isCurrent?: () => boolean }): Promise<boolean | null> {
+    const current = options?.isCurrent;
+    if (current?.() === false) return false;
     const textLength = text.length;
     const hardware = options?.hardware || '';
     const miotDID = options?.miotDID || '';
@@ -461,7 +550,7 @@ export class MinaHTTPClient {
       if (miotDID && this.hasXiaomiIOToken()) {
         try {
           songloft.log.info(`[MinaClient] textToSpeech using MiIO TTS command hardware=${hardware} did=${miotDID} command=${ttsCommand} text_length=${textLength}`);
-          const ok = await new MiIOClient(this.tokenInfo).textToSpeechByCommand(miotDID, ttsCommand, text);
+          const ok = await new MiIOClient(this.tokenInfo).textToSpeechByCommand(miotDID, ttsCommand, text, current);
           if (ok) {
             return true;
           }
@@ -474,24 +563,47 @@ export class MinaHTTPClient {
       }
     }
 
+    if (current?.() === false) return false;
     const message = { text };
     songloft.log.info(`[MinaClient] textToSpeech start device=${deviceId} hardware=${hardware} text_length=${textLength}`);
 
-    const mibrainResult = await this.ubusRequest(deviceId, 'text_to_speech', 'mibrain', message, 'tts:mibrain');
-    if (mibrainResult !== null) {
-      songloft.log.info(`[MinaClient] textToSpeech success endpoint=mibrain/text_to_speech device=${deviceId} code=${mibrainResult.code}`);
+    const mibrainResult = await this.ubusRequest(deviceId, 'text_to_speech', 'mibrain', message, 'tts:mibrain', current, true);
+    const primary = this.ttsAcceptance(mibrainResult);
+    if (primary === null) return null;
+    if (primary) {
+      songloft.log.info(`[MinaClient] textToSpeech success endpoint=mibrain/text_to_speech device=${deviceId} code=${mibrainResult?.code}`);
       return true;
     }
     songloft.log.warn(`[MinaClient] text_to_speech/mibrain failed, falling back to player_play_tts/mediaplayer device=${deviceId}`);
 
-    const fallbackResult = await this.ubusRequest(deviceId, 'player_play_tts', 'mediaplayer', message, 'tts:mediaplayer');
-    if (fallbackResult !== null) {
-      songloft.log.info(`[MinaClient] textToSpeech success endpoint=mediaplayer/player_play_tts device=${deviceId} code=${fallbackResult.code}`);
+    const fallbackResult = await this.ubusRequest(deviceId, 'player_play_tts', 'mediaplayer', message, 'tts:mediaplayer', current, true);
+    const fallback = this.ttsAcceptance(fallbackResult);
+    if (fallback === null) return null;
+    if (fallback) {
+      songloft.log.info(`[MinaClient] textToSpeech success endpoint=mediaplayer/player_play_tts device=${deviceId} code=${fallbackResult?.code}`);
       return true;
     }
 
     songloft.log.warn(`[MinaClient] textToSpeech failed on all endpoints device=${deviceId} text_length=${textLength}`);
     return false;
+  }
+
+  private ttsAcceptance(result: UbusResponse | null): boolean | null {
+    if (!result) return false;
+    const data = result.data;
+    let deviceData: unknown = data && typeof data === 'object'
+      ? (data as Record<string, unknown>).device_data : undefined;
+    if (typeof deviceData === 'string') {
+      try { deviceData = JSON.parse(deviceData); } catch { deviceData = undefined; }
+    }
+    const deviceCode = deviceData && typeof deviceData === 'object'
+      ? Number((deviceData as Record<string, unknown>).code) : NaN;
+    if ((result.code === 0 || result.code === 101) && deviceCode === 3012) {
+      songloft.log.warn('[MinaClient] TTS delivery unconfirmed device_code=3012; avoiding duplicate dispatch');
+      return null;
+    }
+    return result.code === 0 && this.isDeviceResultOK(result, 'tts') &&
+      (Number.isNaN(deviceCode) || deviceCode === 0);
   }
 
   private hasXiaomiIOToken(): boolean {
@@ -516,27 +628,27 @@ export class MinaHTTPClient {
    * @param limit - 记录数量限制（默认2）
    */
   async getLatestAskFromXiaoai(deviceId: string, hardware: string, limit = 2): Promise<AskMessage[] | null> {
-    if (isPollDebug()) songloft.log.info(`[ConversationMonitor] getLatestAskFromXiaoai deviceId=${deviceId} hardware=${hardware} limit=${limit} useMinaForAsk=${shouldUseMinaForAsk(hardware)}`);
+    if (isDebugLog()) songloft.log.info(`[ConversationMonitor] getLatestAskFromXiaoai deviceId=${deviceId} hardware=${hardware} limit=${limit} useMinaForAsk=${shouldUseMinaForAsk(hardware)}`);
     // 部分设备需要通过 ubus 方式获取
     if (shouldUseMinaForAsk(hardware)) {
       const ubusResult = await this.getLatestAskByUbus(deviceId);
-      if (isPollDebug()) songloft.log.info(`[ConversationMonitor] getLatestAskByUbus result: ${ubusResult ? ubusResult.length : 0} messages`);
+      if (isDebugLog()) songloft.log.info(`[ConversationMonitor] getLatestAskByUbus result: ${ubusResult ? ubusResult.length : 0} messages`);
       return ubusResult;
     }
 
     // 与 Go 版一致：在循环外部生成时间戳，重试时复用相同 URL
     const timestamp = Date.now();
     const apiUrl = formatLatestAskUrl(hardware, timestamp, limit);
-    if (isPollDebug()) songloft.log.info(`[ConversationMonitor] getLatestAskFromXiaoai apiUrl=${apiUrl}`);
+    if (isDebugLog()) songloft.log.info(`[ConversationMonitor] getLatestAskFromXiaoai apiUrl=${apiUrl}`);
 
     // 大多数设备通过 xiaoai API 获取，带3次重试
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
       const messages = await this.doGetLatestAskFromXiaoai(deviceId, apiUrl);
       if (messages !== null) {
-        if (isPollDebug()) songloft.log.info(`[ConversationMonitor] getLatestAskFromXiaoai attempt=${attempt} success, ${messages.length} messages`);
+        if (isDebugLog()) songloft.log.info(`[ConversationMonitor] getLatestAskFromXiaoai attempt=${attempt} success, ${messages.length} messages`);
         return messages;
       }
-      if (isPollDebug()) songloft.log.info(`[ConversationMonitor] getLatestAskFromXiaoai attempt=${attempt} returned null, retrying...`);
+      if (isDebugLog()) songloft.log.info(`[ConversationMonitor] getLatestAskFromXiaoai attempt=${attempt} returned null, retrying...`);
     }
     songloft.log.info(`[ConversationMonitor] getLatestAskFromXiaoai all ${MAX_RETRIES} attempts failed`);
     // 返回 null 而非 []：让调用方知道这是「取不到」，不是「没有记录」
@@ -548,8 +660,64 @@ export class MinaHTTPClient {
   /**
    * 获取播放器状态
    */
-  async getPlayerStatus(deviceId: string): Promise<UbusResponse | null> {
-    return this.ubusRequest(deviceId, 'player_get_play_status', 'mediaplayer', {});
+  async getPlayerStatus(deviceId: string, options: StatusQueryOptions = {}): Promise<UbusResponse | null> {
+    const query = this.getStatusQuery(deviceId);
+    if (query.inflight?.revision === query.revision) return query.inflight.promise;
+    const fastTail = options.tail === true && !options.verify && query.tailFastQueries < STATUS_TAIL_FAST_QUERIES;
+    const maxAgeMs = fastTail ? STATUS_TAIL_INTERVAL_MS : Number.isFinite(options.maxAgeMs)
+      ? Math.max(STATUS_MIN_INTERVAL_MS, Math.min(STATUS_INTERVAL_MS, options.maxAgeMs!)) : STATUS_INTERVAL_MS;
+    // 仅缩短当前媒体上下文的成功缓存；失败、控制失效后的冷却仍使用 nextAt。
+    const nextAt = () => query.failures === 0 && query.sample?.revision === query.revision
+      ? Math.min(query.nextAt, query.sample.at + maxAgeMs) : query.nextAt;
+    if (!options.verify && Date.now() < nextAt()) {
+      return query.sample?.revision === query.revision && Date.now() - query.sample.at < maxAgeMs
+        ? query.sample.result : null;
+    }
+
+    const revision = query.revision;
+    const promise = this.enqueueUbus(deviceId, true, async () => {
+      // 控制指令优先执行。旧的后台查询在出队时作废，不再给云端补发历史请求。
+      if (revision !== query.revision || (!options.verify && Date.now() < nextAt())) return null;
+      // 只计实际提前发出的请求；缓存命中和普通五秒查询不消耗/补充额度。
+      // 额度跟随控制上下文，不随播放器重排结束定时器或页面轮询而重置。
+      if (fastTail && Date.now() < query.nextAt) query.tailFastQueries++;
+      let result: UbusResponse | null = null;
+      try {
+        result = await this.doUbusRequest(deviceId, 'player_get_play_status', 'mediaplayer', {}, isDebugLog() ? 'status' : '');
+        const data = result?.data as { info?: string } | undefined;
+        const info = JSON.parse(data?.info || '{}');
+        if (typeof info.status !== 'number' || !Number.isFinite(info.status) || info.status < 0) result = null;
+      } catch {
+        result = null;
+      }
+      // 在途查询期间用户操作过设备：结果属于旧媒体上下文，不能参与任何校准。
+      if (revision !== query.revision) return null;
+      if (result) {
+        result = { ...result, sampledAt: Date.now() };
+        query.sample = { revision, result, at: Date.now() };
+      } else {
+        query.sample = undefined;
+      }
+      query.failures = result ? 0 : query.failures + 1;
+      const delay = result ? STATUS_INTERVAL_MS
+        : STATUS_FAILURE_DELAYS_MS[Math.min(query.failures - 1, STATUS_FAILURE_DELAYS_MS.length - 1)];
+      query.nextAt = Date.now() + delay;
+      if (!result) songloft.log.warn(`[MinaClient] status unavailable device=${deviceId} failures=${query.failures} retryInMs=${delay}`);
+      return result;
+    }).finally(() => {
+      if (query.inflight?.promise === promise) query.inflight = undefined;
+    });
+    query.inflight = { revision, promise };
+    return promise;
+  }
+
+  private getStatusQuery(deviceId: string): StatusQuery {
+    let query = this.statusQueries.get(deviceId);
+    if (!query) {
+      query = { revision: 0, failures: 0, nextAt: 0, tailFastQueries: 0 };
+      this.statusQueries.set(deviceId, query);
+    }
+    return query;
   }
 
   /**
@@ -604,31 +772,49 @@ export class MinaHTTPClient {
   /**
    * 执行 UBus 请求
    */
-  async ubusRequest(deviceId: string, method: string, path: string, message: Record<string, unknown>, logLabel = ''): Promise<UbusResponse | null> {
-    const previous = this.ubusQueues.get(deviceId);
-    let release: () => void = () => {};
-    const current = new Promise<void>(resolve => { release = resolve; });
-    const queued = (previous || Promise.resolve()).catch(() => {}).then(() => current);
-    this.ubusQueues.set(deviceId, queued);
+  async ubusRequest(deviceId: string, method: string, path: string, message: Record<string, unknown>, logLabel = '', isCurrent?: () => boolean, preserveErrors = false): Promise<UbusResponse | null> {
+    if (method === 'player_get_play_status') return this.getPlayerStatus(deviceId);
+    const query = this.getStatusQuery(deviceId);
+    query.revision++;
+    query.tailFastQueries = 0;
+    return this.enqueueUbus(deviceId, false, () => isCurrent?.() === false
+      ? Promise.resolve(null)
+      : this.doUbusRequest(deviceId, method, path, message, logLabel, isCurrent, preserveErrors));
+  }
 
-    if (previous) {
-      if (logLabel) {
-        songloft.log.info(`[MinaClient] ${logLabel} waiting for previous ubus request device=${deviceId}`);
-      }
-      await previous.catch(() => {});
+  private enqueueUbus(deviceId: string, status: boolean, run: UbusTask['run']): Promise<UbusResponse | null> {
+    let queue = this.ubusQueues.get(deviceId);
+    if (!queue) {
+      queue = { running: false, tasks: [] };
+      this.ubusQueues.set(deviceId, queue);
     }
+    const pending = new Promise<UbusResponse | null>((resolve, reject) => {
+      queue.tasks.push({ status, run, resolve, reject });
+    });
+    void this.drainUbus(deviceId, queue);
+    return pending;
+  }
 
+  private async drainUbus(deviceId: string, queue: UbusQueue): Promise<void> {
+    if (queue.running) return;
+    queue.running = true;
     try {
-      return await this.doUbusRequest(deviceId, method, path, message, logLabel);
-    } finally {
-      release();
-      if (this.ubusQueues.get(deviceId) === queued) {
-        this.ubusQueues.delete(deviceId);
+      while (queue.tasks.length) {
+        const controlIndex = queue.tasks.findIndex(task => !task.status);
+        const [task] = queue.tasks.splice(controlIndex < 0 ? 0 : controlIndex, 1);
+        try {
+          task.resolve(await task.run());
+        } catch (error) {
+          task.reject(error);
+        }
       }
+    } finally {
+      queue.running = false;
+      if (this.ubusQueues.get(deviceId) === queue) this.ubusQueues.delete(deviceId);
     }
   }
 
-  private async doUbusRequest(deviceId: string, method: string, path: string, message: Record<string, unknown>, logLabel = ''): Promise<UbusResponse | null> {
+  private async doUbusRequest(deviceId: string, method: string, path: string, message: Record<string, unknown>, logLabel = '', isCurrent?: () => boolean, preserveErrors = false): Promise<UbusResponse | null> {
     const apiUrl = `${MINA_API_BASE_URL}/remote/ubus`;
     const requestId = this.generateRequestId();
 
@@ -648,7 +834,7 @@ export class MinaHTTPClient {
       songloft.log.info(`[MinaClient] ${logLabel} ubus request device=${deviceId} path=${path} method=${method} request_id=${requestId} message=${this.summarizeUbusMessageForLog(message)}`);
     }
 
-    const result = await this.doPostRequest<UbusResponse>(apiUrl, body, logLabel);
+    const result = await this.doPostRequest<UbusResponse>(apiUrl, body, logLabel, undefined, UBUS_TIMEOUT_MS, isCurrent);
 
     // 如果401并且有回调，尝试刷新
     if (result === null) {
@@ -663,7 +849,7 @@ export class MinaHTTPClient {
       if (logLabel) {
         songloft.log.warn(`[MinaClient] ${logLabel} ubus non-zero code=${result.code} message=${result.message || ''} data=${this.summarizeForLog(result.data)}`);
       }
-      return null;
+      return preserveErrors ? result : null;
     }
 
     if (logLabel) {
@@ -767,12 +953,14 @@ export class MinaHTTPClient {
   /**
    * 执行 POST 请求（带401重试）
    */
-  private async doPostRequest<T>(url: string, body: string, logLabel = '', transformResponseText?: (text: string) => string): Promise<T | null> {
+  private async doPostRequest<T>(url: string, body: string, logLabel = '', transformResponseText?: (text: string) => string, timeoutMs?: number, isCurrent?: () => boolean): Promise<T | null> {
+    if (isCurrent?.() === false) return null;
     const headers: Record<string, string> = {
       'User-Agent': this.userAgent,
       'Content-Type': 'application/x-www-form-urlencoded',
       'Cookie': this.buildApiCookies(),
     };
+    if (timeoutMs !== undefined) headers['X-Fetch-Timeout-Ms'] = String(timeoutMs);
 
     let response: any;
     try {
@@ -796,7 +984,8 @@ export class MinaHTTPClient {
       if (this.onTokenExpired) {
         const refreshed = await this.onTokenExpired();
         if (refreshed) {
-          // 重试
+          // token 刷新期间可能收到新播放操作，旧中断指令不得重发。
+          if (isCurrent?.() === false) return null;
           headers['Cookie'] = this.buildApiCookies();
           try {
             const retryResult = await fetchWithRedirects(url, { method: 'POST', headers, body }, new CookieJar(), 0);
@@ -829,6 +1018,8 @@ export class MinaHTTPClient {
         return null;
       }
     }
+
+    if (response.status < 200 || response.status >= 300) return null;
 
     try {
       const text = response.text() as string;
@@ -867,10 +1058,10 @@ export class MinaHTTPClient {
       return null;
     }
 
-    if (isPollDebug()) songloft.log.info(`[ConversationMonitor] doGetLatestAskFromXiaoai status=${response.status}`);
+    if (isDebugLog()) songloft.log.info(`[ConversationMonitor] doGetLatestAskFromXiaoai status=${response.status}`);
 
     if (response.status === 401) {
-      if (isPollDebug()) songloft.log.info(`[ConversationMonitor] doGetLatestAskFromXiaoai 401 token expired`);
+      if (isDebugLog()) songloft.log.info(`[ConversationMonitor] doGetLatestAskFromXiaoai 401 token expired`);
       if (this.onTokenExpired) {
         await this.onTokenExpired();
       }
@@ -885,20 +1076,20 @@ export class MinaHTTPClient {
     try {
       const text = response.text() as string;
       // 打印原始响应体（最多 1000 字符）
-      if (isPollDebug()) songloft.log.info(`[ConversationMonitor] doGetLatestAskFromXiaoai raw response (${text.length} chars): ${text.substring(0, 1000)}`);
+      if (isDebugLog()) songloft.log.info(`[ConversationMonitor] doGetLatestAskFromXiaoai raw response (${text.length} chars): ${text.substring(0, 1000)}`);
 
       const result = JSON.parse(text) as Record<string, unknown>;
 
       // data 字段是一个 JSON 字符串
       const dataStr = result['data'] as string;
       if (!dataStr) {
-        if (isPollDebug()) songloft.log.info(`[ConversationMonitor] doGetLatestAskFromXiaoai data field is empty/null`);
+        if (isDebugLog()) songloft.log.info(`[ConversationMonitor] doGetLatestAskFromXiaoai data field is empty/null`);
         return [];
       }
 
       const dataObj = JSON.parse(dataStr) as ConversationData;
       if (!dataObj.records || dataObj.records.length === 0) {
-        if (isPollDebug()) songloft.log.info(`[ConversationMonitor] doGetLatestAskFromXiaoai records empty or missing`);
+        if (isDebugLog()) songloft.log.info(`[ConversationMonitor] doGetLatestAskFromXiaoai records empty or missing`);
         return [];
       }
 
@@ -917,7 +1108,7 @@ export class MinaHTTPClient {
           },
         };
       });
-      if (isPollDebug()) songloft.log.info(`[ConversationMonitor] doGetLatestAskFromXiaoai parsed ${messages.length} messages`);
+      if (isDebugLog()) songloft.log.info(`[ConversationMonitor] doGetLatestAskFromXiaoai parsed ${messages.length} messages`);
       return messages;
     } catch (e) {
       songloft.log.warn(`[ConversationMonitor] doGetLatestAskFromXiaoai parse error: ${String(e)}`);

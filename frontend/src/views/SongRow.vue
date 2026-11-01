@@ -6,8 +6,8 @@ import { state } from '../store';
 import SlButton from '../ui/SlButton.vue';
 import SlIcon from '../ui/SlIcon.vue';
 
-const props = defineProps<{ song: Song; index: number }>();
-const emit = defineEmits<{ play: [Song, number] }>();
+const props = defineProps<{ song: Song; index: number; removable?: boolean }>();
+const emit = defineEmits<{ play: [Song, number]; remove: [Song] }>();
 const coverSrc = ref('');
 let coverSlot: CoverSlot | null = null;
 let coverGeneration = 0;
@@ -18,15 +18,19 @@ let appliedNonce = 0;
 /**
  * 并发槽的兜底归还时限。
  *
- * 槽位本来只在 `load` / `error` 时归还，但 WebF 存在**两个事件都不发**的情形
- * （`covers.ts` 注释②：imageCache 驱逐后画着已 dispose 的 ui.Image）。那样每漏一个槽
- * 就少一份并发预算，漏满 3 个之后整个列表的封面就永久停在占位图
- * （songloft-org/songloft-plugin-miot#96「列表封面全空白」）。
+ * 槽位本来只在 `load` / `error` 时归还，但存在**两个事件都不发**的情形
+ * （见 `covers.ts` 的注释）。那样每漏一个槽就少一份并发预算，漏满 3 个之后整个
+ * 列表的封面就永久停在占位图（songloft-org/songloft-plugin-miot#96）。
  * 到点强制归还只放开预算，不影响那张图自己继续加载。
  */
 const COVER_SLOT_WATCHDOG_MS = 6000;
 
 function isCurrent() { return state.player.current_song?.id === props.song.id; }
+/**
+ * 本歌单上次播到的那首（每设备 × 每歌单各记一份）。
+ * 正在播的那首已经有自己的高亮，就不再重复挂标记。
+ */
+function isLastPlayed() { return !isCurrent() && state.playlistProgress?.song_id === props.song.id; }
 function duration(seconds?: number) {
   if (!seconds || seconds < 0) return '';
   const minutes = Math.floor(seconds / 60);
@@ -121,12 +125,17 @@ onUnmounted(() => {
         <SlIcon v-else name="music_note" :size="24" />
       </span>
       <span class="song-copy">
-        <span class="song-title">{{ song.title || '未知歌曲' }}</span>
-        <span class="song-meta">{{ song.artist || '未知艺术家' }}<span v-if="song.album"> · {{ song.album }}</span><span v-if="duration(song.duration)"> · {{ duration(song.duration) }}</span></span>
+        <!-- 标记放在歌名**前面**：.song-title 是 nowrap + ellipsis，挂在后面会被长歌名截掉，
+             而这个标记恰恰是长歌名时也必须看得见的东西 -->
+        <span class="song-title"><span v-if="isLastPlayed()" class="song-last-played">上次播放</span>{{ song.title || '未知歌曲' }}</span>
+        <span class="song-artist">{{ song.artist || '未知艺术家' }}</span>
       </span>
+      <span class="song-album">{{ song.album || '' }}</span>
+      <span class="song-duration">{{ duration(song.duration) }}</span>
     </button>
     <div class="song-actions">
-      <SlButton variant="icon" icon="play_arrow" title="播放此曲" @click="emit('play', song, index)" />
+      <SlButton class="song-action-play" variant="icon" icon="play_arrow" title="播放此曲" @click="emit('play', song, index)" />
+      <SlButton v-if="removable" class="song-action-remove" variant="icon" icon="delete" title="从歌单删除" @click="emit('remove', song)" />
     </div>
   </div>
 </template>
