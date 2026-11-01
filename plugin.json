@@ -27,7 +27,7 @@
   ],
   "updateUrl": "https://raw.githubusercontent.com/linruofei/songloft-plugin-miot/main/plugin.json",
   "download_url": "https://github.com/linruofei/songloft-plugin-miot/releases/download/v2026.11.1.2/miot-rf.jsplugin.zip",
-  "entryHash": "e0eafcb5c13d381eef3cf2d145d19b162fefedd9b82f2b53f01436e2d7612add",
-  "zipHash": "61af258336c3905e6432a45b97db33c901ab2d93ca17bc00d1b0b9f1fb129f4d",
+  "entryHash": "819e7dcf6a645232c3d32a3fc81e465e29093dcb0c83a15ae76e68da0f91b648",
+  "zipHash": "81ae75587774ccba3f20c2d2149cdcbfa70e66fe3b016205792fcfef942351da",
   "releaseSource": "70750fea5dc824779c0da7ccf4357abf11398b6e"
 }
