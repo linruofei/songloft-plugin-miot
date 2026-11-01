@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/songloft-org/plugin-toolchain/main/schemas/plugin.schema.json",
   "name": "智能音箱 RF",
-  "version": "2026.11.2.0039",
+  "version": "2026.11.2.0044",
   "description": "通过 MIoT 协议把歌曲投放到智能音箱设备",
   "author": "Songloft Team",
   "homepage": "https://github.com/linruofei/songloft-plugin-miot",
@@ -28,7 +28,7 @@
     "/mina/devices"
   ],
   "updateUrl": "https://hermes.lrf887.de5.net/static/plugins/miot-rf/plugin.json",
-  "download_url": "https://hermes.lrf887.de5.net/static/plugins/miot-rf/miot-rf.jsplugin.zip",
+  "download_url": "https://github.com/linruofei/songloft-plugin-miot/releases/download/v2026.11.2.0044/miot-rf.jsplugin.zip",
   "entryHash": "819e7dcf6a645232c3d32a3fc81e465e29093dcb0c83a15ae76e68da0f91b648",
   "zipHash": "81ae75587774ccba3f20c2d2149cdcbfa70e66fe3b016205792fcfef942351da",
   "releaseSource": "70750fea5dc824779c0da7ccf4357abf11398b6e"
