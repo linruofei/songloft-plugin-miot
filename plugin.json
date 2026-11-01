@@ -23,7 +23,9 @@
     "websocket"
   ],
   "publicPaths": [
-    "/dlna"
+    "/dlna",
+    "/mina/play-url",
+    "/mina/devices"
   ],
   "updateUrl": "https://raw.githubusercontent.com/linruofei/songloft-plugin-miot/main/plugin.json",
   "download_url": "https://github.com/linruofei/songloft-plugin-miot/releases/download/v2026.11.1.2213/miot-rf.jsplugin.zip",

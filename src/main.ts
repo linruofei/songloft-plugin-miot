@@ -37,6 +37,7 @@ import { registerMemoryHandlers } from './handlers/memory';
 import { registerLyricHandlers } from './handlers/lyric';
 import { registerGroupHandlers } from './handlers/group';
 import { registerSearchProviderComm } from './handlers/search_registry';
+import { registerPlaybackComm } from './handlers/playback_comm';
 import { setHostBaseUrl } from './utils/http';
 import { setDebugLog } from './utils/debug';
 import { initStatusStream, handleStatusWebSocket, WS_STATUS_PATH } from './ws/status-stream';
@@ -166,6 +167,7 @@ async function onInit(): Promise<void> {
 
   // 注册「搜索源候选」的插件间通信入口（其他插件经 comm 自注册）
   registerSearchProviderComm(configManager);
+  registerPlaybackComm(minaService, accountManager, configManager);
 
   // 自动登录 + 启动后台服务（异步，不阻塞插件初始化）
   authService.autoLoginAll().catch(e => {
