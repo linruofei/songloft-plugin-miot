@@ -783,7 +783,7 @@ export class IndexingManager {
     return {
       ready: this.indexReady,
       song_count: this.songs.length,
-      playlist_count: this.playlists.length,
+      playlist_count: this.playlists.filter(p => p.id > 0).length,
       last_refresh_time: this.lastRefreshTime > 0
         ? new Date(this.lastRefreshTime).toISOString()
         : '',

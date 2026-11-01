@@ -8,6 +8,9 @@ export function loader(overrides = {}) {
   const cache = new Map();
   function load(file) {
     const path = resolve(dirname(fileURLToPath(import.meta.url)), file);
+    if (!existsSync(path) && file.includes('plugin-sdk')) {
+      return require('@songloft/plugin-sdk');
+    }
     if (cache.has(path))
       return cache.get(path);
     const exports = {};
@@ -17,8 +20,10 @@ export function loader(overrides = {}) {
     new Function('require', 'exports', outputText)(name => {
       if (Object.hasOwn(overrides, name))
         return overrides[name];
-      if (name === '@songloft/plugin-sdk')
-        return load('../../../toolchain/packages/plugin-sdk/src/index.ts');
+      if (name === '@songloft/plugin-sdk') {
+        const toolchainPath = resolve(dirname(fileURLToPath(import.meta.url)), '../../../toolchain/packages/plugin-sdk/src/index.ts');
+        return existsSync(toolchainPath) ? load('../../../toolchain/packages/plugin-sdk/src/index.ts') : require('@songloft/plugin-sdk');
+      }
       if (!name.startsWith('.'))
         return require(name);
       const base = resolve(dirname(path), name);

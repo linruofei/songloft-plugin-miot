@@ -1105,7 +1105,7 @@ export class PlaylistManager {
       cover_url: song.cover_url || '',
       url: pushUrl,
       type: 'remote',
-    };
+    } as any;
     this.songs = [directSong];
     this.totalSongs = 1;
     this.playlistId = this.tempId;
@@ -3678,26 +3678,17 @@ export class PlaylistManager {
       });
     }
 
-    // 播放完当前歌曲后立即异步向音箱下发 stop，压制音箱底层硬件自动从头重放上一首
-    void this.forEachTarget('stop', t => this.minaService.stopPlay(t.account_id, t.device_id)).catch(e => {
-      songloft.log.warn('[PlaylistManager] advanceToNext interim stop error: ' + String(e));
-    });
-
     if (this.playMode === 'singlePlay') {
       // 与主程序一致：自然播放结束后停在当前歌曲，不循环也不推进。
-      // 显式向音箱下发 stop，避免小爱音箱底层硬件媒体服务在 URL 播完后自动重头循环
-      try {
-        await this.forEachTarget('stop', t => this.minaService.stopPlay(t.account_id, t.device_id));
-      } catch (e) {
-        songloft.log.warn('[PlaylistManager] singlePlay stop command error: ' + String(e));
-      }
+      // 标记为 hardStopped，使用户再次点击播放时直接从头重推 URL，避免对已结束的
+      // 设备媒体上下文发送 resume 后出现无声播放。
       this.clearPendingNextIndex();
-      this.state = 'stopped';
+      this.state = 'paused';
       this.playStartTimeMs = 0;
       this.pausedPositionSec = 0;
       this.streamSeekOffsetSec = 0;
       this.hardStopped = true;
-      songloft.log.info('[PlaylistManager] Single-play completed, stopped playback');
+      songloft.log.info('[PlaylistManager] Single-play completed, pausing on current song');
       return;
     }
 
