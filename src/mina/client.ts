@@ -176,7 +176,7 @@ export class MinaHTTPClient {
    *   逐首搜云端曲库匹配真实 audioID（搜不到回退 customAudioId），使触屏音箱显示歌词。
    *   参考 xiaomusic：player_play_music 有兼容性风险，非兼容型号仍走 player_play_url。
    */
-  async playByUrl(deviceId: string, url: string, hardware = '', disabledModels?: string[], keepLight = false, customAudioId?: string, lyricsMode?: { enabled: boolean; songName?: string; metadata?: PlayMetadata }, current?: () => boolean): Promise<boolean> {
+  async playByUrl(deviceId: string, url: string, hardware = '', disabledModels?: string[], keepLight = false, customAudioId?: string, lyricsMode?: { enabled: boolean; songName?: string; metadata?: PlayMetadata }, current?: () => boolean, nextUrl?: string): Promise<boolean> {
     const useMusicAPI = hardware ? needUsePlayMusicAPI(hardware, disabledModels) : false;
     if (isDebugLog()) {
       const disabled = Array.isArray(disabledModels) ? disabledModels.join(',') : '';
@@ -189,21 +189,21 @@ export class MinaHTTPClient {
         const displayName = this.formatPlayMetadataForLog(lyricsMode.metadata || lyricsMode.songName || '');
         songloft.log.info(`[MinaClient] touchscreen lyrics selected audioID=${audioId} fallbackAudioID=${fallbackAudioId} song=${displayName}`);
         // xiaomusic 的 continue_play 通过 _type=1 设置 audio_type=MUSIC；这是触屏歌词/封面的前提。
-        const ok = await this.playByMusicURL(deviceId, url, true, audioId, 'play-music:lyrics', current);
+        const ok = await this.playByMusicURL(deviceId, url, true, audioId, 'play-music:lyrics', current, nextUrl);
         if (ok) {
           return true;
         }
 
         if (audioId !== fallbackAudioId) {
           songloft.log.warn(`[MinaClient] searched audioID failed, retrying default audioID=${fallbackAudioId} in touchscreen lyrics mode`);
-          const defaultLyricsOK = await this.playByMusicURL(deviceId, url, true, fallbackAudioId, 'play-music:lyrics-default', current);
+          const defaultLyricsOK = await this.playByMusicURL(deviceId, url, true, fallbackAudioId, 'play-music:lyrics-default', current, nextUrl);
           if (defaultLyricsOK) {
             return true;
           }
         }
 
         songloft.log.warn('[MinaClient] playByMusicURL failed in touchscreen lyrics mode, retrying normal Music API playback');
-        const normalMusicOK = await this.playByMusicURL(deviceId, url, keepLight, fallbackAudioId, 'play-music:fallback', current);
+        const normalMusicOK = await this.playByMusicURL(deviceId, url, keepLight, fallbackAudioId, 'play-music:fallback', current, nextUrl);
         if (normalMusicOK) {
           return true;
         }
@@ -212,7 +212,7 @@ export class MinaHTTPClient {
         return this.playURL(deviceId, url, keepLight, current);
       }
 
-      return this.playByMusicURL(deviceId, url, keepLight, fallbackAudioId, 'play-music', current);
+      return this.playByMusicURL(deviceId, url, keepLight, fallbackAudioId, 'play-music', current, nextUrl);
     }
     return this.playURL(deviceId, url, keepLight, current);
   }
@@ -334,28 +334,47 @@ export class MinaHTTPClient {
   /**
    * 使用 player_play_music 播放 URL（用于部分设备型号）
    */
-  async playByMusicURL(deviceId: string, audioUrl: string, keepLight = false, customAudioId?: string, logLabel = 'play-music', current?: () => boolean): Promise<boolean> {
+  async playByMusicURL(deviceId: string, audioUrl: string, keepLight = false, customAudioId?: string, logLabel = 'play-music', current?: () => boolean, nextUrl?: string): Promise<boolean> {
     // 默认封面
     const audioId = customAudioId || DEFAULT_MUSIC_AUDIO_ID;
     if (isDebugLog()) {
-      songloft.log.info(`[MinaClient] ${logLabel} stream device=${deviceId} keepLight=${keepLight} audioId=${audioId} url=${this.redactAccessToken(audioUrl).slice(0, 160)}`);
+      songloft.log.info(`[MinaClient] ${logLabel} stream device=${deviceId} keepLight=${keepLight} audioId=${audioId} url=${this.redactAccessToken(audioUrl).slice(0, 160)} nextUrl=${nextUrl ? 'yes' : 'no'}`);
+    }
+
+    const audioItems: any[] = [{
+      item_id: {
+        audio_id: audioId,
+        cp: {
+          album_id: '-1',
+          episode_index: 0,
+          id: MUSIC_CP_ID,
+          name: 'xiaowei',
+        },
+      },
+      stream: { url: audioUrl },
+    }];
+
+    // 方案 B：双缓冲队列直推音箱。如果提供了 nextUrl，直接塞入第 2 首
+    // 当第 1 篇播完自然结束时，音箱硬件会自动接着播放第 2 首，绝不会触发单曲循环重新读开头！
+    if (nextUrl) {
+      audioItems.push({
+        item_id: {
+          audio_id: `${audioId}_next`,
+          cp: {
+            album_id: '-1',
+            episode_index: 1,
+            id: MUSIC_CP_ID,
+            name: 'xiaowei',
+          },
+        },
+        stream: { url: nextUrl },
+      });
     }
 
     const music = {
       payload: {
         audio_type: keepLight ? 'MUSIC' : '',
-        audio_items: [{
-          item_id: {
-            audio_id: audioId,
-            cp: {
-              album_id: '-1',
-              episode_index: 0,
-              id: MUSIC_CP_ID,
-              name: 'xiaowei',
-            },
-          },
-          stream: { url: audioUrl },
-        }],
+        audio_items: audioItems,
         list_params: {
           listId: '-1',
           loadmore_offset: 0,
