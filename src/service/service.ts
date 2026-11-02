@@ -165,6 +165,21 @@ export class MinaService {
   }
 
   /**
+   * 使用 player_play_url 播放原始音频流（适用于有声书、电台、TTS 直推等非音乐曲库流）
+   */
+  async playRawURL(accountId: string, deviceId: string, url: string): Promise<boolean> {
+    const client = this.getClient(accountId);
+    if (!client) return false;
+    try {
+      await client.playerStop(deviceId);
+      return await client.playURL(deviceId, url);
+    } catch (e) {
+      songloft.log.error('[MinaService] playRawURL failed: ' + String(e));
+      return false;
+    }
+  }
+
+  /**
    * 播放指定URL
    * 先暂停并停止旧播放（清理旧媒体上下文），再根据设备型号选择播放接口
    */
