@@ -55,10 +55,78 @@ export function registerPlaybackComm(
 
       songloft.log.info(`[PlaybackComm] play-url for account=${accountId} device=${deviceId} url=${url}`);
       // 直接调用标准 playURL：自动读取音箱型号，适配 Music API 与 player_play_url，跳过歌词匹配
-      const ok = await minaService.playURL(accountId, deviceId, url, payload?.title, undefined, true, payload?.next_url);
+      const ok = await minaService.playURL(accountId, deviceId, url, payload?.title, undefined, true, payload?.next_url, payload?.audio_id, payload?.next_audio_id);
       return { success: ok };
     } catch (e: any) {
       songloft.log.error(`[PlaybackComm] play-url failed: ${String(e)}`);
+      return { success: false, error: String(e) };
+    }
+  });
+
+  // 供其他插件向音箱播放队列追加下一首（不打断正在播放的音频）
+  songloft.comm.onMessage('append-url', async (payload: any) => {
+    try {
+      let accountId = payload?.account_id;
+      let deviceId = payload?.device_id;
+      const url = payload?.url;
+      const audioId = payload?.audio_id;
+
+      if (!url) return { success: false, error: 'url is required' };
+
+      if (!accountId || !deviceId) {
+        const accounts = await accountManager.getAccounts();
+        if (accounts.length > 0) {
+          accountId = accountId || accounts[0].id;
+          deviceId = deviceId || (await accountManager.getLastSelectedDevice(accountId)) || accounts[0].devices?.[0]?.device_id;
+        }
+      }
+
+      if (!accountId || !deviceId) return { success: false, error: 'no active speaker' };
+
+      songloft.log.info(`[PlaybackComm] append-url for device=${deviceId} audioId=${audioId} url=${url}`);
+      const ok = await minaService.appendURL(accountId, deviceId, url, audioId);
+      return { success: ok };
+    } catch (e: any) {
+      songloft.log.error(`[PlaybackComm] append-url failed: ${String(e)}`);
+      return { success: false, error: String(e) };
+    }
+  });
+
+  // 供其他插件查询设备真实播放状态
+  songloft.comm.onMessage('get-player-status', async (payload: any) => {
+    try {
+      let accountId = payload?.account_id;
+      let deviceId = payload?.device_id;
+
+      if (!accountId || !deviceId) {
+        const accounts = await accountManager.getAccounts();
+        if (accounts.length > 0) {
+          accountId = accountId || accounts[0].id;
+          deviceId = deviceId || (await accountManager.getLastSelectedDevice(accountId)) || accounts[0].devices?.[0]?.device_id;
+        }
+      }
+
+      if (!accountId || !deviceId) return { success: false, error: 'no active speaker' };
+
+      const raw = await minaService.getPlayerStatus(accountId, deviceId, { verify: true });
+      const info = (raw?.data as any)?.info;
+      let parsed: any = {};
+      if (typeof info === 'string') {
+        try { parsed = JSON.parse(info); } catch {}
+      }
+
+      return {
+        success: true,
+        data: {
+          status: typeof parsed.status === 'number' ? parsed.status : -1, // 1=playing, 2=paused, 0=stopped
+          volume: typeof parsed.volume === 'number' ? parsed.volume : -1,
+          position: parsed.play_song_detail?.position ? parsed.play_song_detail.position / 1000 : 0,
+          duration: parsed.play_song_detail?.duration ? parsed.play_song_detail.duration / 1000 : 0,
+          audio_id: String(parsed.play_song_detail?.audio_id || ''),
+          raw_info: typeof info === 'string' ? info : '',
+        },
+      };
+    } catch (e: any) {
       return { success: false, error: String(e) };
     }
   });

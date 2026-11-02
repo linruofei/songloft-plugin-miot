@@ -180,10 +180,24 @@ export class MinaService {
   }
 
   /**
+   * 追加音频到当前播放列表尾部（不停止、不打断当前播放）
+   */
+  async appendURL(accountId: string, deviceId: string, url: string, customAudioId?: string): Promise<boolean> {
+    const client = this.getClient(accountId);
+    if (!client) return false;
+    try {
+      return await client.appendMusicURL(deviceId, url, customAudioId);
+    } catch (e) {
+      songloft.log.error('[MinaService] appendURL failed: ' + String(e));
+      return false;
+    }
+  }
+
+  /**
    * 播放指定URL
    * 先暂停并停止旧播放（清理旧媒体上下文），再根据设备型号选择播放接口
    */
-  async playURL(accountId: string, deviceId: string, url: string, song?: string | PlayMetadata, current?: () => boolean, disableLyrics = false, nextUrl?: string): Promise<boolean> {
+  async playURL(accountId: string, deviceId: string, url: string, song?: string | PlayMetadata, current?: () => boolean, disableLyrics = false, nextUrl?: string, customAudioId?: string, nextAudioId?: string): Promise<boolean> {
     if (current?.() === false) return false;
     this.cancelInterrupt(accountId, deviceId, current);
     const client = this.getClient(accountId);
@@ -212,12 +226,12 @@ export class MinaService {
       const config = await this.configManager.getConfig();
       const disabledModels = config.music_api_model_disabled || [];
       const keepLight = !!config.indicator_light_enabled;
-      const customAudioId = config.default_cover_id;
+      const audioIdToUse = customAudioId || config.default_cover_id;
       const lyricsEnabled = disableLyrics ? false : !!config.touchscreen_lyrics_enabled;
-      return await client.playByUrl(deviceId, url, hardware, disabledModels, keepLight, customAudioId,
+      return await client.playByUrl(deviceId, url, hardware, disabledModels, keepLight, audioIdToUse,
         typeof song === 'string'
           ? { enabled: lyricsEnabled, songName: song || '' }
-          : { enabled: lyricsEnabled, metadata: song }, current, nextUrl);
+          : { enabled: lyricsEnabled, metadata: song }, current, nextUrl, nextAudioId);
     } catch (e) {
       songloft.log.error('[MinaService] playURL failed: ' + String(e));
       return false;

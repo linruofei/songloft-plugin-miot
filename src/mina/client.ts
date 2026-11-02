@@ -176,7 +176,7 @@ export class MinaHTTPClient {
    *   逐首搜云端曲库匹配真实 audioID（搜不到回退 customAudioId），使触屏音箱显示歌词。
    *   参考 xiaomusic：player_play_music 有兼容性风险，非兼容型号仍走 player_play_url。
    */
-  async playByUrl(deviceId: string, url: string, hardware = '', disabledModels?: string[], keepLight = false, customAudioId?: string, lyricsMode?: { enabled: boolean; songName?: string; metadata?: PlayMetadata }, current?: () => boolean, nextUrl?: string): Promise<boolean> {
+  async playByUrl(deviceId: string, url: string, hardware = '', disabledModels?: string[], keepLight = false, customAudioId?: string, lyricsMode?: { enabled: boolean; songName?: string; metadata?: PlayMetadata }, current?: () => boolean, nextUrl?: string, nextAudioId?: string): Promise<boolean> {
     const useMusicAPI = hardware ? needUsePlayMusicAPI(hardware, disabledModels) : false;
     if (isDebugLog()) {
       const disabled = Array.isArray(disabledModels) ? disabledModels.join(',') : '';
@@ -189,21 +189,21 @@ export class MinaHTTPClient {
         const displayName = this.formatPlayMetadataForLog(lyricsMode.metadata || lyricsMode.songName || '');
         songloft.log.info(`[MinaClient] touchscreen lyrics selected audioID=${audioId} fallbackAudioID=${fallbackAudioId} song=${displayName}`);
         // xiaomusic 的 continue_play 通过 _type=1 设置 audio_type=MUSIC；这是触屏歌词/封面的前提。
-        const ok = await this.playByMusicURL(deviceId, url, true, audioId, 'play-music:lyrics', current, nextUrl);
+        const ok = await this.playByMusicURL(deviceId, url, true, audioId, 'play-music:lyrics', current, nextUrl, nextAudioId);
         if (ok) {
           return true;
         }
 
         if (audioId !== fallbackAudioId) {
           songloft.log.warn(`[MinaClient] searched audioID failed, retrying default audioID=${fallbackAudioId} in touchscreen lyrics mode`);
-          const defaultLyricsOK = await this.playByMusicURL(deviceId, url, true, fallbackAudioId, 'play-music:lyrics-default', current, nextUrl);
+          const defaultLyricsOK = await this.playByMusicURL(deviceId, url, true, fallbackAudioId, 'play-music:lyrics-default', current, nextUrl, nextAudioId);
           if (defaultLyricsOK) {
             return true;
           }
         }
 
         songloft.log.warn('[MinaClient] playByMusicURL failed in touchscreen lyrics mode, retrying normal Music API playback');
-        const normalMusicOK = await this.playByMusicURL(deviceId, url, keepLight, fallbackAudioId, 'play-music:fallback', current, nextUrl);
+        const normalMusicOK = await this.playByMusicURL(deviceId, url, keepLight, fallbackAudioId, 'play-music:fallback', current, nextUrl, nextAudioId);
         if (normalMusicOK) {
           return true;
         }
@@ -212,7 +212,7 @@ export class MinaHTTPClient {
         return this.playURL(deviceId, url, keepLight, current);
       }
 
-      return this.playByMusicURL(deviceId, url, keepLight, fallbackAudioId, 'play-music', current, nextUrl);
+      return this.playByMusicURL(deviceId, url, keepLight, fallbackAudioId, 'play-music', current, nextUrl, nextAudioId);
     }
     return this.playURL(deviceId, url, keepLight, current);
   }
@@ -334,8 +334,8 @@ export class MinaHTTPClient {
   /**
    * 使用 player_play_music 播放 URL（用于部分设备型号）
    */
-  async playByMusicURL(deviceId: string, audioUrl: string, keepLight = false, customAudioId?: string, logLabel = 'play-music', current?: () => boolean, nextUrl?: string): Promise<boolean> {
-    // 默认封面
+  async playByMusicURL(deviceId: string, audioUrl: string, keepLight = false, customAudioId?: string, logLabel = 'play-music', current?: () => boolean, nextUrl?: string, nextAudioId?: string): Promise<boolean> {
+    // 默认封面或传入的指定 Track ID
     const audioId = customAudioId || DEFAULT_MUSIC_AUDIO_ID;
     if (isDebugLog()) {
       songloft.log.info(`[MinaClient] ${logLabel} stream device=${deviceId} keepLight=${keepLight} audioId=${audioId} url=${this.redactAccessToken(audioUrl).slice(0, 160)} nextUrl=${nextUrl ? 'yes' : 'no'}`);
@@ -359,7 +359,7 @@ export class MinaHTTPClient {
     if (nextUrl) {
       audioItems.push({
         item_id: {
-          audio_id: `${audioId}_next`,
+          audio_id: nextAudioId || `${audioId}_next`,
           cp: {
             album_id: '-1',
             episode_index: 1,
@@ -392,21 +392,49 @@ export class MinaHTTPClient {
 
     const result = await this.ubusRequest(deviceId, 'player_play_music', 'mediaplayer', message, logLabel, current);
     const ok = this.isDeviceResultOK(result, 'player_play_music');
-    // 诊断 songloft-org/songloft#453：ubus 云端汇报 success，但音箱仍无声。
-    // 推送 2s 后异步回读一次真实播放状态，暴露「云端受理但设备未拉流」的静默失败。
-    // fire-and-forget：不阻塞返回、异常吞掉，仅打日志。
-    if (ok && isDebugLog()) {
-      setTimeout(() => {
-        this.getPlayerStatus(deviceId).then(status => {
-          const data = (status?.data ?? {}) as Record<string, unknown>;
-          const info = typeof data.info === 'string' ? data.info : '';
-          songloft.log.info(`[MinaClient] ${logLabel} readback+2s device=${deviceId} code=${status?.code ?? 'null'} info=${info.substring(0, 200)}`);
-        }).catch(e => {
-          songloft.log.warn(`[MinaClient] ${logLabel} readback+2s failed device=${deviceId}: ${String(e)}`);
-        });
-      }, 2000);
-    }
     return ok;
+  }
+
+  /**
+   * 使用 player_play_music 队列追加下一首（play_behavior: 'APPEND'，不打断当前正在播放的音频）
+   */
+  async appendMusicURL(deviceId: string, audioUrl: string, customAudioId?: string, logLabel = 'append-music'): Promise<boolean> {
+    const audioId = customAudioId || `${DEFAULT_MUSIC_AUDIO_ID}_appended_${Date.now()}`;
+    if (isDebugLog()) {
+      songloft.log.info(`[MinaClient] ${logLabel} device=${deviceId} audioId=${audioId} url=${this.redactAccessToken(audioUrl).slice(0, 160)}`);
+    }
+
+    const music = {
+      payload: {
+        audio_type: '',
+        audio_items: [{
+          item_id: {
+            audio_id: audioId,
+            cp: {
+              album_id: '-1',
+              episode_index: 0,
+              id: MUSIC_CP_ID,
+              name: 'xiaowei',
+            },
+          },
+          stream: { url: audioUrl },
+        }],
+        list_params: {
+          listId: '-1',
+          loadmore_offset: 0,
+          origin: 'xiaowei',
+          type: 'MUSIC',
+        },
+      },
+      play_behavior: 'APPEND',
+    };
+
+    const message = {
+      music: JSON.stringify(music),
+    };
+
+    const result = await this.ubusRequest(deviceId, 'player_play_music', 'mediaplayer', message, logLabel);
+    return this.isDeviceResultOK(result, 'player_play_music:append');
   }
 
   /**
