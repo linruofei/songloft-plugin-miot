@@ -88,5 +88,34 @@ export function registerPlaybackComm(
       return { success: false, error: String(e) };
     }
   });
+
+  // 供其他插件调节音箱音量 (set-volume)
+  songloft.comm.onMessage('set-volume', async (payload: any) => {
+    try {
+      const volume = Number(payload?.volume);
+      if (isNaN(volume) || volume < 0 || volume > 100) {
+        return { success: false, error: 'invalid volume (0-100)' };
+      }
+      let accountId = payload?.account_id;
+      let deviceId = payload?.device_id;
+
+      if (!accountId || !deviceId) {
+        const accounts = await accountManager.getAccounts();
+        if (accounts.length > 0) {
+          accountId = accountId || accounts[0].id;
+          deviceId = deviceId || (await accountManager.getLastSelectedDevice(accountId)) || accounts[0].devices?.[0]?.device_id;
+        }
+      }
+
+      if (!accountId || !deviceId) return { success: false, error: 'no speaker device' };
+
+      const ok = await minaService.setVolume(accountId, deviceId, volume);
+      songloft.log.info(`[PlaybackComm] set-volume to ${volume} for device ${deviceId}: result=${ok}`);
+      return { success: ok };
+    } catch (e: any) {
+      songloft.log.error(`[PlaybackComm] set-volume failed: ${String(e)}`);
+      return { success: false, error: String(e) };
+    }
+  });
 }
 
