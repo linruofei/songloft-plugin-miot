@@ -24,8 +24,12 @@
   ],
   "publicPaths": [
     "/dlna",
+    "/config",
     "/mina/play-url",
-    "/mina/devices"
+    "/mina/devices",
+    "/mina/pause",
+    "/mina/resume",
+    "/mina/stop"
   ],
   "updateUrl": "https://hermes.lrf887.de5.net/static/plugins/miot-rf/plugin.json",
   "download_url": "https://github.com/linruofei/songloft-plugin-miot/releases/download/v2026.11.2.0044/miot-rf.jsplugin.zip",
