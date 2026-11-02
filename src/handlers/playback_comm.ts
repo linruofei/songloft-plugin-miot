@@ -54,16 +54,8 @@ export function registerPlaybackComm(
       }
 
       songloft.log.info(`[PlaybackComm] play-url for account=${accountId} device=${deviceId} url=${url}`);
-      let ok = false;
-      if (payload?.use_music_api) {
-        ok = await minaService.playURL(accountId, deviceId, url, payload?.title);
-      } else {
-        ok = await minaService.playRawURL(accountId, deviceId, url);
-        if (!ok) {
-          songloft.log.warn('[PlaybackComm] playRawURL failed, retrying with playURL');
-          ok = await minaService.playURL(accountId, deviceId, url, payload?.title);
-        }
-      }
+      // 直接调用标准 playURL：自动读取音箱型号，适配 Music API 与 player_play_url，跳过歌词匹配
+      const ok = await minaService.playURL(accountId, deviceId, url, payload?.title, undefined, true);
       return { success: ok };
     } catch (e: any) {
       songloft.log.error(`[PlaybackComm] play-url failed: ${String(e)}`);

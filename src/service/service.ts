@@ -183,7 +183,7 @@ export class MinaService {
    * 播放指定URL
    * 先暂停并停止旧播放（清理旧媒体上下文），再根据设备型号选择播放接口
    */
-  async playURL(accountId: string, deviceId: string, url: string, song?: string | PlayMetadata, current?: () => boolean): Promise<boolean> {
+  async playURL(accountId: string, deviceId: string, url: string, song?: string | PlayMetadata, current?: () => boolean, disableLyrics = false): Promise<boolean> {
     if (current?.() === false) return false;
     this.cancelInterrupt(accountId, deviceId, current);
     const client = this.getClient(accountId);
@@ -213,7 +213,7 @@ export class MinaService {
       const disabledModels = config.music_api_model_disabled || [];
       const keepLight = !!config.indicator_light_enabled;
       const customAudioId = config.default_cover_id;
-      const lyricsEnabled = !!config.touchscreen_lyrics_enabled;
+      const lyricsEnabled = disableLyrics ? false : !!config.touchscreen_lyrics_enabled;
       return await client.playByUrl(deviceId, url, hardware, disabledModels, keepLight, customAudioId,
         typeof song === 'string'
           ? { enabled: lyricsEnabled, songName: song || '' }
