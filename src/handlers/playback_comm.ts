@@ -115,14 +115,22 @@ export function registerPlaybackComm(
         try { parsed = JSON.parse(info); } catch {}
       }
 
+      const status = typeof parsed.status === 'number' ? parsed.status : -1;
+      const volume = typeof parsed.volume === 'number' ? parsed.volume : -1;
+      const position = parsed.play_song_detail?.position ? parsed.play_song_detail.position / 1000 : 0;
+      const duration = parsed.play_song_detail?.duration ? parsed.play_song_detail.duration / 1000 : 0;
+      const audio_id = String(parsed.play_song_detail?.audio_id || '');
+
+      songloft.log.info(`[PlaybackComm] get-player-status: status=${status} pos=${position.toFixed(1)}s dur=${duration.toFixed(1)}s audioId="${audio_id}" vol=${volume}`);
+
       return {
         success: true,
         data: {
-          status: typeof parsed.status === 'number' ? parsed.status : -1, // 1=playing, 2=paused, 0=stopped
-          volume: typeof parsed.volume === 'number' ? parsed.volume : -1,
-          position: parsed.play_song_detail?.position ? parsed.play_song_detail.position / 1000 : 0,
-          duration: parsed.play_song_detail?.duration ? parsed.play_song_detail.duration / 1000 : 0,
-          audio_id: String(parsed.play_song_detail?.audio_id || ''),
+          status, // 1=playing, 2=paused, 0=stopped
+          volume,
+          position,
+          duration,
+          audio_id,
           raw_info: typeof info === 'string' ? info : '',
         },
       };
